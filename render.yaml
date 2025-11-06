@@ -4,7 +4,7 @@ services:
     env: node
     region: oregon
     plan: free
-    buildCommand: cd "PC-master- Copy" && npm install --include=dev && npm run build
+    buildCommand: cd "PC-master- Copy" && npm install --include=dev && npm run build && npm run db:push
     startCommand: cd "PC-master- Copy" && npm run start
     envVars:
       - key: NODE_ENV
