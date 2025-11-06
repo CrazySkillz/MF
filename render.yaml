@@ -4,9 +4,8 @@ services:
     env: node
     region: oregon
     plan: free
-    rootDir: PC-master- Copy
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    buildCommand: cd "PC-master- Copy" && npm install && npm run build
+    startCommand: cd "PC-master- Copy" && npm run start
     envVars:
       - key: NODE_ENV
         value: production
