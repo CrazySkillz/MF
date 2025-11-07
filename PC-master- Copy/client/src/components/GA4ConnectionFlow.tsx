@@ -34,25 +34,7 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [showClientIdInput, setShowClientIdInput] = useState(false);
-  const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
-  const [isCheckingConfig, setIsCheckingConfig] = useState(true);
   const { toast } = useToast();
-
-  // Check if OAuth is configured on the backend
-  useEffect(() => {
-    const checkOAuthConfig = async () => {
-      try {
-        const response = await fetch('/api/auth/google/config');
-        const data = await response.json();
-        setIsOAuthConfigured(data.configured);
-      } catch (error) {
-        console.error('Failed to check OAuth config:', error);
-      } finally {
-        setIsCheckingConfig(false);
-      }
-    };
-    checkOAuthConfig();
-  }, []);
 
   const handleTokenConnect = async () => {
     console.log('GA4 Connect button clicked!', { campaignId, accessToken: accessToken.substring(0, 10) + '...', propertyId });
@@ -123,93 +105,6 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
   };
 
   const handleGoogleOAuth = async () => {
-    // If OAuth is configured on backend, use the backend flow
-    if (isOAuthConfigured) {
-      setIsOAuthLoading(true);
-
-      try {
-        // Get OAuth URL from backend
-        const response = await fetch('/api/auth/google/url', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            campaignId,
-            returnUrl: window.location.href
-          })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok || data.error) {
-          throw new Error(data.error || 'Failed to generate OAuth URL');
-        }
-
-        // Open OAuth URL in popup
-        const popup = window.open(
-          data.oauth_url,
-          'google_oauth',
-          'width=500,height=600,scrollbars=yes,resizable=yes'
-        );
-
-        if (!popup) {
-          setIsOAuthLoading(false);
-          toast({
-            title: "Popup Blocked",
-            description: "Please allow popups and try again.",
-            variant: "destructive"
-          });
-          return;
-        }
-
-        // Listen for OAuth callback
-        const handleMessage = (event: MessageEvent) => {
-          if (event.data.type === 'GOOGLE_OAUTH_SUCCESS') {
-            window.removeEventListener('message', handleMessage);
-            setIsOAuthLoading(false);
-
-            // Fetch properties
-            fetchGoogleAnalyticsProperties();
-          } else if (event.data.type === 'GOOGLE_OAUTH_ERROR') {
-            window.removeEventListener('message', handleMessage);
-            setIsOAuthLoading(false);
-            toast({
-              title: "OAuth Failed",
-              description: event.data.error || "Authentication failed",
-              variant: "destructive"
-            });
-          }
-        };
-
-        window.addEventListener('message', handleMessage);
-
-        // Monitor popup closure
-        const checkClosed = setInterval(() => {
-          if (popup.closed) {
-            clearInterval(checkClosed);
-            window.removeEventListener('message', handleMessage);
-            setIsOAuthLoading(false);
-          }
-        }, 1000);
-
-        toast({
-          title: "Authenticate with Google",
-          description: "Complete the authentication in the popup window.",
-          duration: 3000,
-        });
-
-      } catch (error) {
-        console.error('OAuth initiation error:', error);
-        setIsOAuthLoading(false);
-        toast({
-          title: "OAuth Failed",
-          description: error instanceof Error ? error.message : "Failed to start OAuth flow.",
-          variant: "destructive"
-        });
-      }
-      return;
-    }
-
-    // Fallback to manual OAuth flow if not configured
     if (!clientId || !clientSecret) {
       setShowClientIdInput(true);
       toast({
@@ -221,18 +116,18 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
     }
 
     setIsOAuthLoading(true);
-
+    
     try {
       // Generate OAuth URL directly on client side
       const redirectUri = `${window.location.origin}/oauth-callback.html`;
       const scope = 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/analytics.edit';
       const responseType = 'code';
       const state = `campaign_${campaignId}`;
-
+      
       // Debug: Log the redirect URI being used
       console.log('OAuth Debug - Redirect URI being used:', redirectUri);
       console.log('OAuth Debug - Client ID:', clientId);
-
+      
       const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
         `client_id=${encodeURIComponent(clientId)}&` +
         `redirect_uri=${encodeURIComponent(redirectUri)}&` +
@@ -241,23 +136,23 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
         `state=${encodeURIComponent(state)}&` +
         `access_type=offline&` +
         `prompt=consent`;
-
+      
       console.log('OAuth Debug - Full OAuth URL:', oauthUrl);
-
+      
       // Create OAuth callback handler
       const handleOAuthCallback = (event: MessageEvent) => {
         if (event.origin !== window.location.origin) return;
-
+        
         if (event.data.type === 'OAUTH_SUCCESS') {
           window.removeEventListener('message', handleOAuthCallback);
           setIsOAuthLoading(false);
-
+          
           const { code } = event.data;
           exchangeCodeForTokens(code);
         } else if (event.data.type === 'OAUTH_ERROR') {
           window.removeEventListener('message', handleOAuthCallback);
           setIsOAuthLoading(false);
-
+          
           toast({
             title: "OAuth Failed",
             description: event.data.error || "Authentication failed",
@@ -265,16 +160,16 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
           });
         }
       };
-
+      
       window.addEventListener('message', handleOAuthCallback);
-
+      
       // Open OAuth in popup window
       const popup = window.open(
         oauthUrl,
         'google_oauth',
         'width=500,height=600,scrollbars=yes,resizable=yes'
       );
-
+      
       // Check if popup was blocked
       if (!popup) {
         window.removeEventListener('message', handleOAuthCallback);
@@ -286,7 +181,7 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
         });
         return;
       }
-
+      
       // Monitor popup closure
       const checkClosed = setInterval(() => {
         if (popup.closed) {
@@ -295,13 +190,13 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
           setIsOAuthLoading(false);
         }
       }, 1000);
-
+      
       toast({
         title: "Authenticate with Google",
         description: "Complete the authentication in the popup window.",
         duration: 3000,
       });
-
+      
     } catch (error) {
       console.error('OAuth initiation error:', error);
       setIsOAuthLoading(false);
@@ -367,7 +262,7 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
       // Check if OAuth connection exists
       const response = await fetch(`/api/ga4/check-connection/${campaignId}`);
       const data = await response.json();
-
+      
       if (data.connected && data.properties) {
         setOauthProperties(data.properties);
         setShowPropertySelection(true);
@@ -380,32 +275,7 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
       console.error('OAuth check error:', error);
     }
   };
-
-  const fetchGoogleAnalyticsProperties = async () => {
-    try {
-      const response = await fetch(`/api/ga4/properties/${campaignId}`);
-      const data = await response.json();
-
-      if (data.success && data.properties) {
-        setOauthProperties(data.properties);
-        setShowPropertySelection(true);
-        toast({
-          title: "Authentication Successful!",
-          description: "Please select your GA4 property to complete the connection.",
-        });
-      } else {
-        throw new Error(data.error || 'Failed to fetch properties');
-      }
-    } catch (error) {
-      console.error('Failed to fetch GA4 properties:', error);
-      toast({
-        title: "Failed to Fetch Properties",
-        description: error instanceof Error ? error.message : "Please try again.",
-        variant: "destructive"
-      });
-    }
-  };
-
+  
   const handlePropertySelection = async () => {
     if (!selectedProperty) {
       toast({
@@ -579,8 +449,8 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
               {!showPropertySelection ? (
                 <div className="space-y-4">
 
-
-                  {showClientIdInput && !isOAuthConfigured && (
+                  
+                  {showClientIdInput && (
                     <div className="space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border">
                       <div className="space-y-2">
                         <Label htmlFor="client-id">Google OAuth Client ID</Label>
@@ -606,19 +476,14 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
                       </p>
                     </div>
                   )}
-
-                  <Button
+                  
+                  <Button 
                     onClick={handleGoogleOAuth}
-                    disabled={isCheckingConfig || isOAuthLoading || (!isOAuthConfigured && (!clientId || !clientSecret) && showClientIdInput)}
+                    disabled={isOAuthLoading || (!clientId || !clientSecret) && showClientIdInput}
                     size="lg"
                     className="w-full bg-blue-600 hover:bg-blue-700"
                   >
-                    {isCheckingConfig ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                        Loading...
-                      </>
-                    ) : isOAuthLoading ? (
+                    {isOAuthLoading ? (
                       <>
                         <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                         Connecting...
@@ -630,9 +495,9 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
                       </>
                     )}
                   </Button>
-
-                  {!showClientIdInput && !isOAuthConfigured && (
-                    <Button
+                  
+                  {!showClientIdInput && (
+                    <Button 
                       variant="outline"
                       onClick={() => setShowClientIdInput(true)}
                       className="w-full"
