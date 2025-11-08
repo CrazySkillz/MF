@@ -5,11 +5,21 @@ import * as schema from "@shared/schema";
 
 neonConfig.webSocketConstructor = ws;
 
+let pool: Pool | null = null;
+let db: any = null;
+
 if (!process.env.DATABASE_URL) {
   console.warn("DATABASE_URL not set. Using in-memory storage.");
-  // For in-memory storage, we don't need a database connection
-  // The pool and db exports will not be used
+} else {
+  try {
+    console.log("Initializing database connection...");
+    pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    db = drizzle({ client: pool, schema });
+    console.log("Database connection initialized successfully.");
+  } catch (error) {
+    console.error("Failed to initialize database connection:", error);
+    console.warn("Falling back to in-memory storage.");
+  }
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-export const db = drizzle({ client: pool, schema });
+export { pool, db };

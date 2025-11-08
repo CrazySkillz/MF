@@ -3212,7 +3212,17 @@ export class DatabaseStorage implements IStorage {
 }
 
 // Switch between DatabaseStorage and MemStorage
-// For in-memory storage (no database needed), use: new MemStorage()
-// For database storage, use: new DatabaseStorage()
-// Temporarily using MemStorage to ensure app stability
-export const storage = new MemStorage();
+// Automatically use DatabaseStorage if DATABASE_URL is configured, otherwise MemStorage
+import { db } from './db';
+
+let storageInstance: IStorage;
+
+if (process.env.DATABASE_URL && db) {
+  console.log("Using DatabaseStorage for persistent data.");
+  storageInstance = new DatabaseStorage();
+} else {
+  console.log("Using MemStorage (in-memory). Data will not persist between restarts.");
+  storageInstance = new MemStorage();
+}
+
+export const storage = storageInstance;
