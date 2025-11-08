@@ -477,17 +477,6 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
                   </>
                 )}
               </Button>
-
-              {!showClientIdInput && (
-                <Button
-                  variant="outline"
-                  onClick={() => setShowClientIdInput(true)}
-                  className="w-full"
-                >
-                  <Key className="w-4 h-4 mr-2" />
-                  Enter OAuth Credentials Manually
-                </Button>
-              )}
             </div>
           ) : (
             <div className="space-y-4">
