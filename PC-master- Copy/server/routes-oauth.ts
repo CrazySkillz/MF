@@ -614,26 +614,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Get Analytics properties
+      console.log('🔍 Step 1: Fetching Google Analytics accounts...');
+      console.log('Access token (first 20 chars):', tokenData.access_token.substring(0, 20));
+
       const accountsResponse = await fetch('https://analyticsadmin.googleapis.com/v1alpha/accounts', {
         headers: {
           'Authorization': `Bearer ${tokenData.access_token}`
         }
       });
-      
+
+      console.log('Accounts API response status:', accountsResponse.status);
+
       let properties: any[] = [];
       if (accountsResponse.ok) {
         const accountsData = await accountsResponse.json();
-        
+        console.log('Raw accounts response:', JSON.stringify(accountsData, null, 2));
+        console.log('Accounts found:', accountsData.accounts?.length || 0);
+
+        if (!accountsData.accounts || accountsData.accounts.length === 0) {
+          console.error('❌ NO ACCOUNTS FOUND! User may not have any Google Analytics accounts.');
+        }
+
         for (const account of accountsData.accounts || []) {
+          const accountId = account.name.split('/').pop();
+          console.log(`\n🔍 Step 2: Fetching properties for account: ${account.displayName} (${accountId})`);
+
           try {
-            const propertiesResponse = await fetch(`https://analyticsadmin.googleapis.com/v1alpha/${account.name}/properties`, {
+            // Use the correct API format with filter parameter
+            const propertiesUrl = `https://analyticsadmin.googleapis.com/v1beta/properties?filter=parent:accounts/${accountId}`;
+            console.log('Properties API URL:', propertiesUrl);
+
+            const propertiesResponse = await fetch(propertiesUrl, {
               headers: {
                 'Authorization': `Bearer ${tokenData.access_token}`
               }
             });
-            
+
+            console.log('Properties API response status:', propertiesResponse.status);
+
             if (propertiesResponse.ok) {
               const propertiesData = await propertiesResponse.json();
+              console.log('Raw properties response:', JSON.stringify(propertiesData, null, 2));
+              console.log('Properties count for this account:', propertiesData.properties?.length || 0);
+
               for (const property of propertiesData.properties || []) {
                 properties.push({
                   id: property.name.split('/').pop(),
@@ -641,11 +664,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   account: account.displayName
                 });
               }
+            } else {
+              const errorText = await propertiesResponse.text();
+              console.error(`❌ Failed to fetch properties for ${account.displayName}:`, errorText);
             }
           } catch (error) {
-            console.warn('Error fetching properties for account:', account.name, error);
+            console.error('Error fetching properties for account:', account.name, error);
           }
         }
+      } else {
+        const errorText = await accountsResponse.text();
+        console.error('❌ Failed to fetch accounts:', errorText);
       }
       
       console.log('About to store OAuth connection...');
