@@ -1092,29 +1092,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('OAuth callback result:', result);
       
       if (result.success) {
+        // Instead of using window.opener (blocked by COOP), use localStorage
         res.send(`
           <html>
             <head><title>Google Analytics Connected</title></head>
             <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
               <h2 style="color: #4285f4;">🎉 Successfully Connected!</h2>
-              <p>Your Google Analytics account is now connected to MarketPulse.</p>
-              <p>You can now access real-time metrics and data.</p>
-              <button onclick="closeWindow()" style="background: #4285f4; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Close Window</button>
+              <p>Your Google Analytics account is now connected.</p>
+              <p id="status">Redirecting back to application...</p>
               <script>
-                function closeWindow() {
+                (function() {
                   try {
-                    // Notify parent window of success
-                    if (window.opener) {
-                      window.opener.postMessage({ type: 'auth_success' }, window.location.origin);
+                    // Use localStorage as fallback since window.opener is blocked by COOP
+                    localStorage.setItem('ga4_auth_success', JSON.stringify({
+                      timestamp: Date.now(),
+                      campaignId: '${state}'
+                    }));
+
+                    // Try window.opener first (might work in some environments)
+                    if (window.opener && !window.opener.closed) {
+                      try {
+                        window.opener.postMessage({
+                          type: 'GOOGLE_AUTH_SUCCESS',
+                          campaignId: '${state}'
+                        }, '*');
+                      } catch (e) {
+                        console.log('postMessage blocked:', e);
+                      }
                     }
+
+                    // Auto close and let parent poll localStorage
+                    setTimeout(function() {
+                      window.close();
+                    }, 1500);
                   } catch (e) {
-                    console.log('Could not notify parent:', e);
+                    document.getElementById('status').textContent = 'Please close this window and refresh the page.';
+                    console.error('Auth callback error:', e);
                   }
-                  window.close();
-                }
-                
-                // Auto-close after 3 seconds
-                setTimeout(closeWindow, 3000);
+                })();
               </script>
             </body>
           </html>
