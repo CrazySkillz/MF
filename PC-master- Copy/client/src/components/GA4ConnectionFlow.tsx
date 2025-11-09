@@ -162,8 +162,56 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
           throw new Error('Popup was blocked. Please allow popups and try again.');
         }
 
-        // Popup opened successfully - reset loading state
-        setIsOAuthLoading(false);
+        // Listen for OAuth callback from popup
+        const handleOAuthMessage = (event: MessageEvent) => {
+          // Only accept messages from our own origin
+          if (event.origin !== window.location.origin) return;
+
+          console.log('Received message from popup:', event.data);
+
+          if (event.data.type === 'GOOGLE_AUTH_SUCCESS') {
+            // Remove listener
+            window.removeEventListener('message', handleOAuthMessage);
+            setIsOAuthLoading(false);
+
+            const { data: authData } = event.data;
+
+            if (authData && authData.properties) {
+              // Show property selection
+              setOauthProperties(authData.properties);
+              setShowPropertySelection(true);
+              toast({
+                title: "Authentication Successful!",
+                description: "Please select your GA4 property to complete the connection.",
+              });
+            } else {
+              toast({
+                title: "Authentication Successful!",
+                description: "But no GA4 properties found. Please check your Google Analytics account.",
+                variant: "destructive"
+              });
+            }
+          } else if (event.data.type === 'GOOGLE_AUTH_ERROR') {
+            window.removeEventListener('message', handleOAuthMessage);
+            setIsOAuthLoading(false);
+            toast({
+              title: "OAuth Failed",
+              description: event.data.error || "Authentication failed",
+              variant: "destructive"
+            });
+          }
+        };
+
+        window.addEventListener('message', handleOAuthMessage);
+
+        // Monitor popup closure
+        const checkClosed = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkClosed);
+            window.removeEventListener('message', handleOAuthMessage);
+            setIsOAuthLoading(false);
+          }
+        }, 1000);
 
         toast({
           title: "Check the Popup Window",
@@ -172,9 +220,6 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
         });
 
         console.log('Popup opened successfully. Waiting for user to complete authorization...');
-
-        // Monitor for success (this will be implemented later with proper callback handling)
-        // For now, user will need to refresh after authorization
 
       } catch (error) {
         console.error('Backend OAuth flow error:', error);
