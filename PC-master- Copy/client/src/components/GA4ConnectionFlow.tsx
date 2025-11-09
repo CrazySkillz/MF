@@ -158,14 +158,20 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
         );
 
         if (!popup) {
+          setIsOAuthLoading(false);
           throw new Error('Popup was blocked. Please allow popups and try again.');
         }
 
+        // Popup opened successfully - reset loading state
+        setIsOAuthLoading(false);
+
         toast({
-          title: "Authenticate with Google",
-          description: "Sign in with your Google account in the popup window.",
-          duration: 3000,
+          title: "Check the Popup Window",
+          description: "Sign in with your Google account in the popup window that just opened.",
+          duration: 5000,
         });
+
+        console.log('Popup opened successfully. Waiting for user to complete authorization...');
 
         // Monitor for success (this will be implemented later with proper callback handling)
         // For now, user will need to refresh after authorization
