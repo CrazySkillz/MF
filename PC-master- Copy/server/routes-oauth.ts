@@ -644,8 +644,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('Campaign ID:', campaignId);
       console.log('Properties found:', properties.length);
       console.log('Token data available:', !!tokenData.access_token, !!tokenData.refresh_token);
-      
-      // Store the OAuth connection
+
+      // Store the OAuth connection in memory temporarily (for property selection step)
       (global as any).oauthConnections = (global as any).oauthConnections || new Map();
       (global as any).oauthConnections.set(campaignId, {
         accessToken: tokenData.access_token,
@@ -655,11 +655,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         properties,
         connectedAt: new Date().toISOString()
       });
-      
+
+      // Also create the GA4 connection in database (without property selected yet)
+      // This will be updated when user selects a property
+      try {
+        await storage.createGA4Connection({
+          campaignId,
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          email: userInfo?.email || '',
+          propertyId: '', // Will be set when property is selected
+          propertyName: '' // Will be set when property is selected
+        });
+        console.log('Created GA4 connection in database for campaign:', campaignId);
+      } catch (error) {
+        console.error('Failed to create GA4 connection in database:', error);
+        // Continue anyway - will retry on property selection
+      }
+
       console.log('OAuth connection stored for campaignId:', campaignId);
       console.log('Total connections after storage:', (global as any).oauthConnections.size);
       console.log('All connection keys:', Array.from((global as any).oauthConnections.keys()));
-      
+
       res.json({
         success: true,
         user: userInfo,
