@@ -487,9 +487,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Check if OAuth is configured on backend
   app.get("/api/auth/google/config", (req, res) => {
     const isConfigured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+    // Use x-forwarded-proto header for correct protocol when behind proxy (Render)
+    const protocol = req.get('x-forwarded-proto') || req.protocol;
+    const host = req.get('host');
     res.json({
       configured: isConfigured,
-      redirectUri: `${req.protocol}://${req.get('host')}/auth/google/callback`
+      redirectUri: `${protocol}://${host}/auth/google/callback`
     });
   });
 
@@ -511,12 +514,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "https://www.googleapis.com/auth/analytics.readonly",
         "https://www.googleapis.com/auth/userinfo.email"
       ];
-      
+
       const state = Buffer.from(JSON.stringify({ campaignId, returnUrl })).toString('base64');
-      
+
+      // Always use https for redirect URI (Render uses proxy/load balancer for SSL)
+      const protocol = req.get('x-forwarded-proto') || req.protocol;
+      const host = req.get('host');
+      const redirectUri = `${protocol}://${host}/auth/google/callback`;
+
       const params = {
         client_id: clientId,
-        redirect_uri: `${req.protocol}://${req.get('host')}/auth/google/callback`,
+        redirect_uri: redirectUri,
         scope: scopes.join(" "),
         response_type: "code",
         access_type: "offline",
@@ -524,10 +532,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         state: state,
         include_granted_scopes: "true"
       };
-      
+
+      console.log('OAuth redirect URI:', redirectUri); // Debug log
+
       const queryString = new URLSearchParams(params).toString();
       const oauthUrl = `${baseUrl}?${queryString}`;
-      
+
       res.json({ oauth_url: oauthUrl });
     } catch (error) {
       console.error('OAuth URL generation error:', error);
