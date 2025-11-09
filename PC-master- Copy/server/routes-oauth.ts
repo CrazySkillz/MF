@@ -4012,6 +4012,271 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // LinkedIn Seed Data Endpoint - Generate realistic test data
+  app.post("/api/linkedin/seed-data/:campaignId", async (req, res) => {
+    try {
+      const { campaignId } = req.params;
+      const { days = 30 } = req.body; // Default to 30 days of data
+
+      console.log(`🌱 Starting seed data generation for campaign ${campaignId}...`);
+
+      // Campaign profiles with realistic performance characteristics
+      const campaignProfiles = [
+        {
+          name: 'Brand Awareness - Tech Leaders',
+          objective: 'awareness',
+          budget: 150,
+          performanceMultiplier: 1.2,
+        },
+        {
+          name: 'Lead Generation - Enterprise Sales',
+          objective: 'conversion',
+          budget: 300,
+          performanceMultiplier: 1.5,
+        },
+        {
+          name: 'Engagement - Thought Leadership',
+          objective: 'engagement',
+          budget: 100,
+          performanceMultiplier: 0.9,
+        },
+        {
+          name: 'Product Launch - Innovation Series',
+          objective: 'awareness',
+          budget: 250,
+          performanceMultiplier: 1.8,
+        },
+        {
+          name: 'Webinar Promotion - Q1 Summit',
+          objective: 'conversion',
+          budget: 200,
+          performanceMultiplier: 1.3,
+        },
+      ];
+
+      // Function to generate realistic daily metrics
+      const generateDailyMetrics = (profile: any, dayOffset: number) => {
+        const { budget, performanceMultiplier, objective } = profile;
+
+        // Weekend effect
+        const date = new Date();
+        date.setDate(date.getDate() - dayOffset);
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+        const weekendMultiplier = isWeekend ? 0.7 : 1.0;
+
+        // Trend improvement over time
+        const trendMultiplier = 1 + (Number(days) - dayOffset) * 0.01;
+
+        // Random variation (±15%)
+        const randomVariation = 0.85 + Math.random() * 0.3;
+        const totalMultiplier = performanceMultiplier * weekendMultiplier * trendMultiplier * randomVariation;
+
+        // Calculate spend
+        const spend = budget * (0.85 + Math.random() * 0.3);
+
+        // Objective-specific benchmarks
+        let baseCTR, baseConversionRate, baseCPC;
+        if (objective === 'awareness') {
+          baseCTR = 0.45;
+          baseConversionRate = 0.015;
+          baseCPC = 6.5;
+        } else if (objective === 'engagement') {
+          baseCTR = 0.75;
+          baseConversionRate = 0.025;
+          baseCPC = 5.5;
+        } else {
+          baseCTR = 0.38;
+          baseConversionRate = 0.035;
+          baseCPC = 8.5;
+        }
+
+        // Calculate metrics
+        const cpm = (25 + Math.random() * 45) * totalMultiplier;
+        const impressions = Math.round((spend / cpm) * 1000);
+        const reach = Math.round(impressions * (0.6 + Math.random() * 0.2));
+        const ctr = baseCTR * totalMultiplier;
+        const clicks = Math.round(impressions * (ctr / 100));
+        const cpc = clicks > 0 ? spend / clicks : baseCPC * totalMultiplier;
+        const engagementRate = (2 + Math.random() * 4) * totalMultiplier;
+        const engagements = Math.round(impressions * (engagementRate / 100));
+        const cvr = baseConversionRate * totalMultiplier;
+        const conversions = Math.round(clicks * cvr);
+        const leads = Math.round(conversions * (0.6 + Math.random() * 0.2));
+        const videoViews = Math.round(impressions * (0.3 + Math.random() * 0.2));
+        const viralImpressions = Math.round(impressions * (0.05 + Math.random() * 0.1));
+        const avgDealValue = 2000 + Math.random() * 3000;
+        const revenue = conversions * avgDealValue * 0.3;
+        const cpa = conversions > 0 ? spend / conversions : 0;
+        const cpl = leads > 0 ? spend / leads : 0;
+        const roi = revenue > 0 ? ((revenue - spend) / spend) * 100 : 0;
+        const roas = spend > 0 ? revenue / spend : 0;
+
+        return {
+          date: date.toISOString().split('T')[0],
+          impressions,
+          reach,
+          clicks,
+          engagements,
+          spend: Number(spend.toFixed(2)),
+          conversions,
+          leads,
+          videoViews,
+          viralImpressions,
+          ctr: Number(ctr.toFixed(2)),
+          cpc: Number(cpc.toFixed(2)),
+          cpm: Number(cpm.toFixed(2)),
+          cvr: Number((cvr * 100).toFixed(2)),
+          cpa: Number(cpa.toFixed(2)),
+          cpl: Number(cpl.toFixed(2)),
+          er: Number(engagementRate.toFixed(2)),
+          roi: Number(roi.toFixed(2)),
+          roas: Number(roas.toFixed(2)),
+          revenue: Number(revenue.toFixed(2)),
+          conversionRate: Number((cvr * 100).toFixed(2)),
+        };
+      };
+
+      // Check if LinkedIn connection exists, create if not
+      let connection = await storage.getLinkedInConnection(campaignId);
+      if (!connection) {
+        console.log('Creating LinkedIn connection...');
+        connection = await storage.createLinkedInConnection({
+          campaignId,
+          adAccountId: 'demo-account-' + Math.random().toString(36).substring(7),
+          adAccountName: 'Performance Core Demo Account',
+          accessToken: 'demo_token_' + Date.now(),
+          refreshToken: 'demo_refresh_' + Date.now(),
+          method: 'oauth',
+          expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+        });
+        console.log('✓ LinkedIn connection created');
+      }
+
+      // Create import session
+      const session = await storage.createLinkedInImportSession({
+        campaignId,
+        adAccountId: connection.adAccountId,
+        adAccountName: connection.adAccountName,
+        selectedCampaignsCount: campaignProfiles.length,
+        selectedMetricsCount: 18, // All metrics
+        selectedMetricKeys: ['impressions', 'reach', 'clicks', 'engagements', 'spend', 'conversions', 'leads', 'videoViews', 'viralImpressions', 'ctr', 'cpc', 'cpm', 'cvr', 'cpa', 'cpl', 'er', 'roi', 'roas'],
+        conversionValue: null,
+      });
+
+      console.log('✓ Import session created');
+
+      let totalRecordsInserted = 0;
+      const campaignSummaries = [];
+
+      // Generate data for each campaign profile
+      for (const profile of campaignProfiles) {
+        const campaignIdUnique = `lc_${Math.random().toString(36).substring(2, 15)}`;
+
+        // Campaign totals
+        let totals = {
+          impressions: 0,
+          clicks: 0,
+          spend: 0,
+          conversions: 0,
+          leads: 0,
+          revenue: 0,
+        };
+
+        // Generate daily metrics
+        for (let dayOffset = 0; dayOffset < days; dayOffset++) {
+          const metrics = generateDailyMetrics(profile, dayOffset);
+
+          // Create import metric record
+          await storage.createLinkedInImportMetric({
+            sessionId: session.id,
+            campaignUrn: campaignIdUnique,
+            campaignName: profile.name,
+            campaignStatus: 'ACTIVE',
+            metricKey: 'impressions',
+            metricValue: metrics.impressions.toString(),
+          });
+
+          // Create ad performance record
+          await storage.createLinkedInAdPerformance({
+            sessionId: session.id,
+            campaignId: campaignIdUnique,
+            date: metrics.date,
+            impressions: metrics.impressions,
+            reach: metrics.reach,
+            clicks: metrics.clicks,
+            engagements: metrics.engagements,
+            spend: metrics.spend.toString(),
+            conversions: metrics.conversions,
+            leads: metrics.leads,
+            videoViews: metrics.videoViews,
+            viralImpressions: metrics.viralImpressions,
+            ctr: metrics.ctr.toString(),
+            cpc: metrics.cpc.toString(),
+            cpm: metrics.cpm.toString(),
+            cvr: metrics.cvr.toString(),
+            cpa: metrics.cpa.toString(),
+            cpl: metrics.cpl.toString(),
+            er: metrics.er.toString(),
+            roi: metrics.roi.toString(),
+            roas: metrics.roas.toString(),
+            revenue: metrics.revenue.toString(),
+            conversionRate: metrics.conversionRate.toString(),
+          });
+
+          totals.impressions += metrics.impressions;
+          totals.clicks += metrics.clicks;
+          totals.spend += metrics.spend;
+          totals.conversions += metrics.conversions;
+          totals.leads += metrics.leads;
+          totals.revenue += metrics.revenue;
+
+          totalRecordsInserted++;
+        }
+
+        campaignSummaries.push({
+          name: profile.name,
+          objective: profile.objective,
+          totals: {
+            impressions: totals.impressions.toLocaleString(),
+            clicks: totals.clicks.toLocaleString(),
+            spend: `$${totals.spend.toFixed(2)}`,
+            conversions: totals.conversions,
+            leads: totals.leads,
+            revenue: `$${totals.revenue.toFixed(2)}`,
+            avgCTR: ((totals.clicks / totals.impressions) * 100).toFixed(2) + '%',
+            avgROAS: (totals.revenue / totals.spend).toFixed(2),
+          }
+        });
+
+        console.log(`✓ Generated ${days} days of data for: ${profile.name}`);
+      }
+
+      console.log(`✅ Seed completed: ${totalRecordsInserted} records inserted`);
+
+      res.json({
+        success: true,
+        message: 'Realistic LinkedIn metrics data seeded successfully',
+        summary: {
+          sessionId: session.id,
+          campaignId,
+          totalRecords: totalRecordsInserted,
+          campaigns: campaignProfiles.length,
+          daysOfData: days,
+          timeRange: `Last ${days} days`,
+          campaigns: campaignSummaries,
+        }
+      });
+
+    } catch (error) {
+      console.error('LinkedIn seed data error:', error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to seed LinkedIn data",
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // LinkedIn Reports Routes
   
   // Get all LinkedIn reports
