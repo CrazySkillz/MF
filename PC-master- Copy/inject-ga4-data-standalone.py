@@ -38,7 +38,7 @@ WEBSITE_TYPE = "saas"
 DAYS = 30
 
 # Server will auto-stop after data injection (True) or keep running (False)
-STOP_SERVER_WHEN_DONE = True
+STOP_SERVER_WHEN_DONE = False
 
 # ═══════════════════════════════════════════════════════════════════════
 # Don't change anything below this line
