@@ -1271,10 +1271,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       } catch (error) {
         console.error('Failed to fetch GA4 properties:', error);
+
+        // Return detailed error information to help debug
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        const errorDetails = {
+          error: errorMessage,
+          hint: 'Check if you have the correct permissions on your GA4 property',
+          troubleshooting: [
+            'Verify you have at least Viewer access to the GA4 property',
+            'Check if the property is GA4 (not Universal Analytics)',
+            'Make sure you selected the correct Google account',
+            'Try revoking access and reconnecting: https://myaccount.google.com/permissions'
+          ]
+        };
+
         res.json({
           success: true,
           properties: [],
-          message: 'OAuth successful, but failed to fetch properties. You can enter Property ID manually.'
+          message: 'OAuth successful, but failed to fetch properties.',
+          errorDetails: errorDetails,
+          _debug: {
+            errorMessage,
+            timestamp: new Date().toISOString()
+          }
         });
       }
 
@@ -1283,6 +1302,110 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({
         success: false,
         error: 'Internal server error during OAuth exchange'
+      });
+    }
+  });
+
+  // Diagnostic endpoint to test GA4 Admin API access
+  app.get("/api/ga4/diagnose/:campaignId", async (req, res) => {
+    try {
+      const { campaignId } = req.params;
+
+      // Get the OAuth connection
+      const oauthConnection = (global as any).oauthConnections?.get(campaignId);
+
+      if (!oauthConnection) {
+        return res.json({
+          success: false,
+          error: 'No OAuth connection found',
+          hint: 'Please connect your Google account first'
+        });
+      }
+
+      const { accessToken } = oauthConnection;
+      const diagnosticResults: any = {
+        timestamp: new Date().toISOString(),
+        campaignId,
+        hasAccessToken: !!accessToken,
+        tests: []
+      };
+
+      // Test 1: Fetch accounts
+      console.log('Diagnostic: Testing accounts API...');
+      try {
+        const accountsResponse = await fetch('https://analyticsadmin.googleapis.com/v1alpha/accounts', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        const accountsResult: any = {
+          test: 'Fetch Analytics Accounts',
+          status: accountsResponse.status,
+          ok: accountsResponse.ok
+        };
+
+        if (accountsResponse.ok) {
+          const accountsData = await accountsResponse.json();
+          accountsResult.accountsCount = accountsData.accounts?.length || 0;
+          accountsResult.accounts = accountsData.accounts?.map((a: any) => ({
+            id: a.name,
+            displayName: a.displayName
+          })) || [];
+        } else {
+          accountsResult.error = await accountsResponse.text();
+        }
+
+        diagnosticResults.tests.push(accountsResult);
+
+        // Test 2: If we have accounts, try to fetch properties
+        if (accountsResponse.ok) {
+          const accountsData = await accountsResponse.json();
+          for (const account of accountsData.accounts || []) {
+            const accountId = account.name.split('/').pop();
+
+            const propertyTest: any = {
+              test: `Fetch Properties for ${account.displayName}`,
+              accountId
+            };
+
+            try {
+              const endpoint = `https://analyticsadmin.googleapis.com/v1beta/properties?filter=parent:accounts/${accountId}`;
+              const propertiesResponse = await fetch(endpoint, {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+              });
+
+              propertyTest.status = propertiesResponse.status;
+              propertyTest.ok = propertiesResponse.ok;
+
+              if (propertiesResponse.ok) {
+                const propertiesData = await propertiesResponse.json();
+                propertyTest.propertiesCount = propertiesData.properties?.length || 0;
+                propertyTest.properties = propertiesData.properties?.map((p: any) => ({
+                  id: p.name,
+                  displayName: p.displayName
+                })) || [];
+              } else {
+                propertyTest.error = await propertiesResponse.text();
+              }
+            } catch (error) {
+              propertyTest.error = error instanceof Error ? error.message : 'Unknown error';
+            }
+
+            diagnosticResults.tests.push(propertyTest);
+          }
+        }
+      } catch (error) {
+        diagnosticResults.tests.push({
+          test: 'Fetch Analytics Accounts',
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+
+      res.json(diagnosticResults);
+
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   });
