@@ -840,50 +840,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/ga4/select-property", async (req, res) => {
     try {
       const { campaignId, propertyId } = req.body;
-      
-      console.log('Property selection request:', { campaignId, propertyId });
-      
+
+      console.log('🔗 Property selection request:', { campaignId, propertyId });
+
       if (!campaignId || !propertyId) {
+        console.error('❌ Missing campaignId or propertyId');
         return res.status(400).json({ error: 'Campaign ID and Property ID are required' });
       }
-      
+
       const connections = (global as any).oauthConnections;
-      console.log('Available connections:', {
+      console.log('🔍 Checking OAuth connections:', {
         hasGlobalConnections: !!connections,
         connectionKeys: connections ? Array.from(connections.keys()) : [],
         hasThisCampaign: connections ? connections.has(campaignId) : false
       });
-      
+
       if (!connections || !connections.has(campaignId)) {
-        return res.status(404).json({ error: 'No OAuth connection found for this campaign' });
+        console.error('❌ No OAuth connection found for campaign:', campaignId);
+        console.error('Available campaigns:', connections ? Array.from(connections.keys()) : 'No connections');
+        return res.status(404).json({
+          error: 'No OAuth connection found for this campaign',
+          debug: {
+            requestedCampaign: campaignId,
+            availableCampaigns: connections ? Array.from(connections.keys()) : []
+          }
+        });
       }
-      
+
       const connection = connections.get(campaignId);
-      
+      console.log('✅ Found OAuth connection:', {
+        hasAccessToken: !!connection.accessToken,
+        hasRefreshToken: !!connection.refreshToken,
+        propertiesCount: connection.properties?.length || 0
+      });
+
       connection.selectedPropertyId = propertyId;
       connection.selectedProperty = connection.properties?.find((p: any) => p.id === propertyId);
+
+      console.log('📝 Selected property details:', connection.selectedProperty);
 
       // CRITICAL: Update the database connection with the selected property ID
       const propertyName = connection.selectedProperty?.name || `Property ${propertyId}`;
 
+      console.log('💾 Updating database with property:', { campaignId, propertyId, propertyName });
+
       // First get the GA4 connection by campaignId
       const ga4Connection = await storage.getPrimaryGA4Connection(campaignId);
       if (ga4Connection) {
+        console.log('✅ Found existing GA4 connection in database:', ga4Connection.id);
         await storage.updateGA4Connection(ga4Connection.id, {
           propertyId,
           propertyName
         });
 
-        console.log('Updated database connection with property:', {
+        console.log('✅ Updated database connection with property:', {
           campaignId,
           connectionId: ga4Connection.id,
           propertyId,
           propertyName
         });
       } else {
-        console.warn('No GA4 connection found for campaign:', campaignId);
+        console.warn('⚠️ No GA4 connection found in database for campaign:', campaignId);
+        console.log('🔧 Creating new GA4 connection in database...');
+
+        try {
+          await storage.createGA4Connection({
+            campaignId,
+            propertyId,
+            accessToken: connection.accessToken,
+            refreshToken: connection.refreshToken,
+            method: 'access_token',
+            propertyName,
+            clientId: null,
+            clientSecret: null,
+            serviceAccountKey: null
+          });
+          console.log('✅ Created new GA4 connection in database');
+        } catch (dbError) {
+          console.error('❌ Failed to create GA4 connection in database:', dbError);
+        }
       }
-      
+
       // Store in real GA4 connections for metrics access
       (global as any).realGA4Connections = (global as any).realGA4Connections || new Map();
       (global as any).realGA4Connections.set(campaignId, {
@@ -894,14 +931,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isReal: true,
         propertyName
       });
-      
+
+      console.log('✅ Property selection completed successfully');
+
       res.json({
         success: true,
         selectedProperty: connection.selectedProperty
       });
     } catch (error) {
-      console.error('Property selection error:', error);
-      res.status(500).json({ error: 'Failed to select property' });
+      console.error('❌ Property selection error:', error);
+      res.status(500).json({
+        error: 'Failed to select property',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
