@@ -1286,6 +1286,232 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GA4 Seed Data Endpoint - Generate realistic test data for website analytics
+  app.post("/api/ga4/seed-data/:campaignId", async (req, res) => {
+    try {
+      const { campaignId } = req.params;
+      const { days = 30, websiteType = 'saas' } = req.body; // Default to 30 days, SaaS profile
+
+      console.log(`🌱 Starting GA4 seed data generation for campaign ${campaignId}...`);
+
+      // Website type profiles with realistic characteristics
+      const websiteProfiles: any = {
+        ecommerce: {
+          name: 'E-commerce Store',
+          avgDailySessions: 2500,
+          conversionRate: 2.5,
+          avgSessionDuration: 180,
+          bounceRate: 45,
+          performanceMultiplier: 1.3,
+        },
+        saas: {
+          name: 'SaaS Product Website',
+          avgDailySessions: 1800,
+          conversionRate: 4.2,
+          avgSessionDuration: 240,
+          bounceRate: 38,
+          performanceMultiplier: 1.5,
+        },
+        blog: {
+          name: 'Content Blog',
+          avgDailySessions: 3500,
+          conversionRate: 0.8,
+          avgSessionDuration: 150,
+          bounceRate: 58,
+          performanceMultiplier: 1.1,
+        },
+        corporate: {
+          name: 'Corporate Website',
+          avgDailySessions: 1200,
+          conversionRate: 3.8,
+          avgSessionDuration: 200,
+          bounceRate: 42,
+          performanceMultiplier: 1.0,
+        },
+        leadgen: {
+          name: 'Lead Generation Site',
+          avgDailySessions: 1500,
+          conversionRate: 5.5,
+          avgSessionDuration: 220,
+          bounceRate: 35,
+          performanceMultiplier: 1.4,
+        },
+      };
+
+      const profile = websiteProfiles[websiteType] || websiteProfiles.saas;
+
+      // Function to generate realistic daily GA4 metrics
+      const generateDailyGA4Metrics = (dayOffset: number) => {
+        const { avgDailySessions, conversionRate, avgSessionDuration, bounceRate, performanceMultiplier } = profile;
+
+        const date = new Date();
+        date.setDate(date.getDate() - dayOffset);
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+
+        // Apply multipliers
+        const weekendMultiplier = isWeekend ? 0.75 : 1.0;
+        const trendMultiplier = 1 + (Number(days) - dayOffset) * 0.008;
+        const randomVariation = 0.85 + Math.random() * 0.3;
+        const totalMultiplier = performanceMultiplier * weekendMultiplier * trendMultiplier * randomVariation;
+
+        // Traffic metrics
+        const sessions = Math.round(avgDailySessions * totalMultiplier);
+        const returningUserRate = 0.3 + Math.random() * 0.2;
+        const users = Math.round(sessions * (0.85 + Math.random() * 0.1));
+        const newUsers = Math.round(users * (1 - returningUserRate));
+        const activeUsers = Math.round(users * (0.7 + Math.random() * 0.2));
+
+        // Page views
+        const pagesPerSession = 2.5 + Math.random() * 2.5;
+        const pageviews = Math.round(sessions * pagesPerSession);
+
+        // Engagement
+        const calculatedBounceRate = bounceRate * (0.9 + Math.random() * 0.2) / 100;
+        const engagementRate = 1 - calculatedBounceRate;
+        const engagedSessions = Math.round(sessions * engagementRate);
+        const averageSessionDurationSeconds = Math.round(avgSessionDuration * (0.8 + Math.random() * 0.4));
+        const userEngagementDuration = averageSessionDurationSeconds * sessions;
+
+        // Events
+        const eventsPerSession = 4 + Math.random() * 6;
+        const eventCount = Math.round(sessions * eventsPerSession);
+
+        // Conversions
+        const conversions = Math.round(sessions * (conversionRate / 100) * (0.8 + Math.random() * 0.4));
+
+        // Advertising metrics (3% of sessions from ads)
+        const adClickRate = 0.03;
+        const adSessions = Math.round(sessions * adClickRate);
+        const impressions = Math.round(adSessions / 0.02); // 2% CTR
+        const clicks = adSessions;
+        const ctr = clicks / impressions * 100;
+        const cpc = 5 + Math.random() * 10;
+        const spend = clicks * cpc;
+
+        return {
+          date: date.toISOString().split('T')[0],
+          sessions,
+          users,
+          newUsers,
+          activeUsers,
+          pageviews,
+          bounceRate: calculatedBounceRate,
+          engagementRate,
+          averageSessionDuration: averageSessionDurationSeconds,
+          userEngagementDuration,
+          engagedSessions,
+          eventsPerSession,
+          eventCount,
+          conversions,
+          impressions,
+          clicks,
+          ctr,
+          cpc,
+          spend,
+        };
+      };
+
+      // Check if GA4 connection exists, create if not
+      let connection = await storage.getPrimaryGA4Connection(campaignId);
+      if (!connection) {
+        console.log('Creating GA4 connection...');
+        connection = await storage.createGA4Connection({
+          campaignId,
+          propertyId: 'properties/' + Math.floor(Math.random() * 999999999),
+          propertyName: `${profile.name} - Analytics`,
+          websiteUrl: 'https://www.demo-website.com',
+          displayName: 'Main Website Property',
+          method: 'access_token',
+          accessToken: 'demo_token_' + Date.now(),
+          refreshToken: 'demo_refresh_' + Date.now(),
+          isPrimary: true,
+          isActive: true,
+          clientId: 'demo_client_id',
+          clientSecret: 'demo_client_secret',
+          expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+        });
+        console.log('✓ GA4 connection created');
+      }
+
+      let totalRecordsInserted = 0;
+      const summaryMetrics = {
+        sessions: 0,
+        users: 0,
+        pageviews: 0,
+        conversions: 0,
+        impressions: 0,
+        clicks: 0,
+        totalSpend: 0,
+      };
+
+      // Generate daily metrics
+      for (let dayOffset = 0; dayOffset < days; dayOffset++) {
+        const metrics = generateDailyGA4Metrics(dayOffset);
+
+        // Store in performance_data table
+        await storage.createPerformanceData({
+          campaignId,
+          date: metrics.date,
+          impressions: metrics.impressions,
+          clicks: metrics.clicks,
+          spend: metrics.spend.toFixed(2),
+          conversions: metrics.conversions,
+          reach: metrics.users,
+          engagement: metrics.engagedSessions,
+        });
+
+        summaryMetrics.sessions += metrics.sessions;
+        summaryMetrics.users += metrics.users;
+        summaryMetrics.pageviews += metrics.pageviews;
+        summaryMetrics.conversions += metrics.conversions;
+        summaryMetrics.impressions += metrics.impressions;
+        summaryMetrics.clicks += metrics.clicks;
+        summaryMetrics.totalSpend += metrics.spend;
+
+        totalRecordsInserted++;
+      }
+
+      console.log(`✅ Seed completed: ${totalRecordsInserted} records inserted`);
+
+      const avgCTR = (summaryMetrics.clicks / summaryMetrics.impressions) * 100;
+      const avgConversionRate = (summaryMetrics.conversions / summaryMetrics.sessions) * 100;
+      const avgCPC = summaryMetrics.totalSpend / summaryMetrics.clicks;
+
+      res.json({
+        success: true,
+        message: 'Realistic GA4 metrics data seeded successfully',
+        summary: {
+          propertyId: connection.propertyId,
+          propertyName: connection.propertyName,
+          websiteType,
+          totalRecords: totalRecordsInserted,
+          daysOfData: days,
+          timeRange: `Last ${days} days`,
+          totals: {
+            sessions: summaryMetrics.sessions.toLocaleString(),
+            users: summaryMetrics.users.toLocaleString(),
+            pageviews: summaryMetrics.pageviews.toLocaleString(),
+            conversions: summaryMetrics.conversions.toLocaleString(),
+            adImpressions: summaryMetrics.impressions.toLocaleString(),
+            adClicks: summaryMetrics.clicks.toLocaleString(),
+            adSpend: `$${summaryMetrics.totalSpend.toFixed(2)}`,
+            avgCTR: `${avgCTR.toFixed(2)}%`,
+            avgConversionRate: `${avgConversionRate.toFixed(2)}%`,
+            avgCPC: `$${avgCPC.toFixed(2)}`,
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('GA4 seed data error:', error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to seed GA4 data",
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // Google Sheets OAuth endpoints
   
   // OAuth code exchange for Google Sheets
