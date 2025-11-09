@@ -568,8 +568,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (e) {
         console.warn('Could not parse OAuth state:', e);
       }
-      
+
       // Exchange authorization code for tokens
+      // Use x-forwarded-proto for correct protocol behind proxy
+      const protocol = req.get('x-forwarded-proto') || req.protocol;
+      const host = req.get('host');
+      const redirectUri = `${protocol}://${host}/auth/google/callback`;
+
+      console.log('Token exchange - redirect URI:', redirectUri);
+
       const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: {
@@ -580,16 +587,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           client_secret: clientSecret,
           code: code,
           grant_type: 'authorization_code',
-          redirect_uri: `${req.protocol}://${req.get('host')}/auth/google/callback`
+          redirect_uri: redirectUri
         })
       });
-      
+
       const tokenData = await tokenResponse.json();
-      
+
       if (!tokenResponse.ok) {
         console.error('Token exchange failed:', tokenData);
-        return res.status(400).json({ 
-          error: tokenData.error_description || 'Failed to exchange authorization code' 
+        return res.status(400).json({
+          error: tokenData.error_description || 'Failed to exchange authorization code'
         });
       }
       
