@@ -748,7 +748,7 @@ export class MemStorage implements IStorage {
 
   // GA4 Connection methods
   async getGA4Connections(campaignId: string): Promise<GA4Connection[]> {
-    return Array.from(this.ga4Connections.values()).filter(conn => conn.campaignId === campaignId && conn.isActive);
+    return Array.from(this.ga4Connections.values()).filter(conn => conn.campaignId === campaignId);
   }
 
   async getGA4Connection(campaignId: string, propertyId?: string): Promise<GA4Connection | undefined> {
@@ -1688,7 +1688,7 @@ export class DatabaseStorage implements IStorage {
   // GA4 Connection methods
   async getGA4Connections(campaignId: string): Promise<GA4Connection[]> {
     return db.select().from(ga4Connections)
-      .where(and(eq(ga4Connections.campaignId, campaignId), eq(ga4Connections.isActive, true)))
+      .where(eq(ga4Connections.campaignId, campaignId))
       .orderBy(ga4Connections.connectedAt);
   }
 
@@ -1697,28 +1697,23 @@ export class DatabaseStorage implements IStorage {
       const [connection] = await db.select().from(ga4Connections)
         .where(and(
           eq(ga4Connections.campaignId, campaignId),
-          eq(ga4Connections.propertyId, propertyId),
-          eq(ga4Connections.isActive, true)
+          eq(ga4Connections.propertyId, propertyId)
         ));
       return connection || undefined;
     }
-    
+
     // Return the primary connection if no propertyId specified
     const [primary] = await db.select().from(ga4Connections)
       .where(and(
         eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isPrimary, true),
-        eq(ga4Connections.isActive, true)
+        eq(ga4Connections.isPrimary, true)
       ));
-    
+
     if (primary) return primary;
-    
-    // If no primary, return the first active connection
+
+    // If no primary, return the first connection
     const [first] = await db.select().from(ga4Connections)
-      .where(and(
-        eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isActive, true)
-      ))
+      .where(eq(ga4Connections.campaignId, campaignId))
       .orderBy(ga4Connections.connectedAt)
       .limit(1);
     return first || undefined;
@@ -1728,18 +1723,15 @@ export class DatabaseStorage implements IStorage {
     const [primary] = await db.select().from(ga4Connections)
       .where(and(
         eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isPrimary, true),
-        eq(ga4Connections.isActive, true)
+        eq(ga4Connections.isPrimary, true)
       ));
     
     if (primary) return primary;
-    
-    // If no primary, return the first active connection
+
+
+    // If no primary, return the first connection
     const [first] = await db.select().from(ga4Connections)
-      .where(and(
-        eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isActive, true)
-      ))
+      .where(eq(ga4Connections.campaignId, campaignId))
       .orderBy(ga4Connections.connectedAt)
       .limit(1);
     return first || undefined;
