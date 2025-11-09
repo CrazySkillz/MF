@@ -226,7 +226,7 @@ export class GoogleAnalytics4Service {
               connection.clientSecret || undefined
             );
             
-            await storage.updateGA4ConnectionTokens(campaignId, {
+            await storage.updateGA4ConnectionTokens(connection.id, {
               accessToken: refreshResult.access_token,
               refreshToken: connection.refreshToken,
               expiresAt: new Date(Date.now() + (refreshResult.expires_in * 1000))
@@ -399,7 +399,7 @@ export class GoogleAnalytics4Service {
             );
             
             // Update the connection with new access token
-            await storage.updateGA4ConnectionTokens(campaignId, {
+            await storage.updateGA4ConnectionTokens(connection.id, {
               accessToken: refreshResult.access_token,
               refreshToken: connection.refreshToken, // Keep the same refresh token
               expiresAt: new Date(Date.now() + (refreshResult.expires_in * 1000))

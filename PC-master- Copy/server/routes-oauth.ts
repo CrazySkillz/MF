@@ -833,19 +833,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       connection.selectedPropertyId = propertyId;
       connection.selectedProperty = connection.properties?.find((p: any) => p.id === propertyId);
-      
+
       // CRITICAL: Update the database connection with the selected property ID
       const propertyName = connection.selectedProperty?.name || `Property ${propertyId}`;
-      await storage.updateGA4Connection(campaignId, {
-        propertyId,
-        propertyName
-      });
-      
-      console.log('Updated database connection with property:', {
-        campaignId,
-        propertyId,
-        propertyName
-      });
+
+      // First get the GA4 connection by campaignId
+      const ga4Connection = await storage.getPrimaryGA4Connection(campaignId);
+      if (ga4Connection) {
+        await storage.updateGA4Connection(ga4Connection.id, {
+          propertyId,
+          propertyName
+        });
+
+        console.log('Updated database connection with property:', {
+          campaignId,
+          connectionId: ga4Connection.id,
+          propertyId,
+          propertyName
+        });
+      } else {
+        console.warn('No GA4 connection found for campaign:', campaignId);
+      }
       
       // Store in real GA4 connections for metrics access
       (global as any).realGA4Connections = (global as any).realGA4Connections || new Map();
