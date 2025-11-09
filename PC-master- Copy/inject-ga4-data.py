@@ -1,18 +1,45 @@
 #!/usr/bin/env python3
 """
-Simple script to inject realistic GA4 metrics into Performance Core
-Just run: python3 inject-ga4-data.py
+═══════════════════════════════════════════════════════════════════════
+  GA4 REALISTIC METRICS INJECTION SCRIPT
+═══════════════════════════════════════════════════════════════════════
+
+  🚀 HOW TO USE IN YOUR IDE (PyCharm, VS Code, etc.):
+
+  1. Make sure the server is running first:
+     - Open terminal and run: npm run dev
+     - Wait for message: "serving on port 5000"
+
+  2. Click the "Run" button in your IDE (or press F5)
+
+  3. That's it! Data will be injected automatically.
+
+═══════════════════════════════════════════════════════════════════════
+
+  📝 CUSTOMIZE HERE (Optional):
 """
 
 import requests
 import json
 import sys
 
-# Configuration
+# ═══════════════════════════════════════════════════════════════════════
+# CONFIGURATION - CHANGE THESE VALUES IF NEEDED
+# ═══════════════════════════════════════════════════════════════════════
+
 BASE_URL = "http://localhost:5000"
 CAMPAIGN_NAME = "Website Analytics - Q1 2025"
-WEBSITE_TYPE = "saas"  # Options: saas, ecommerce, blog, corporate, leadgen
+
+# Website type - determines the realistic metrics generated
+# Options: "saas", "ecommerce", "blog", "corporate", "leadgen"
+WEBSITE_TYPE = "saas"
+
+# Number of days of historical data to generate
 DAYS = 30
+
+# ═══════════════════════════════════════════════════════════════════════
+# Don't change anything below this line
+# ═══════════════════════════════════════════════════════════════════════
 
 def print_header(text):
     print(f"\n{'='*60}")
@@ -110,8 +137,8 @@ def main():
     print_header("GA4 Metrics Data Injection Tool")
 
     print("This script will:")
-    print("  1. Create a new campaign")
-    print("  2. Inject 30 days of realistic GA4 metrics")
+    print(f"  1. Create a campaign: '{CAMPAIGN_NAME}'")
+    print(f"  2. Inject {DAYS} days of realistic GA4 metrics ({WEBSITE_TYPE} website)")
     print("  3. Display the results\n")
 
     # Check if server is running
@@ -119,9 +146,15 @@ def main():
         requests.get(BASE_URL, timeout=2)
     except:
         print_error("Server is not running!")
-        print_info("Please start the server first:")
-        print_info("  cd 'PC-master- Copy'")
-        print_info("  npm run dev\n")
+        print("\n" + "="*60)
+        print("  ⚠️  ACTION REQUIRED")
+        print("="*60)
+        print("\n1️⃣  Open a terminal")
+        print("2️⃣  Run this command:")
+        print("\n    npm run dev")
+        print("\n3️⃣  Wait for: 'serving on port 5000'")
+        print("4️⃣  Then run this script again\n")
+        print("="*60 + "\n")
         sys.exit(1)
 
     # Create campaign
