@@ -1157,20 +1157,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get GA4 properties using the access token
       try {
         let properties = [];
-        
+
         // Step 1: Get all accounts first
         console.log('Step 1: Fetching Google Analytics accounts...');
+        console.log('Access token (first 20 chars):', access_token.substring(0, 20));
         const accountsResponse = await fetch('https://analyticsadmin.googleapis.com/v1alpha/accounts', {
           headers: { 'Authorization': `Bearer ${access_token}` }
         });
 
+        console.log('Accounts API response status:', accountsResponse.status);
+
         if (!accountsResponse.ok) {
           const errorText = await accountsResponse.text();
           console.error('Failed to fetch accounts:', accountsResponse.status, errorText);
+          console.error('Full error response:', errorText);
           throw new Error(`Failed to fetch accounts: ${accountsResponse.status}`);
         }
 
         const accountsData = await accountsResponse.json();
+        console.log('Raw accounts response:', JSON.stringify(accountsData, null, 2));
         console.log('Accounts found:', {
           count: accountsData.accounts?.length || 0,
           accounts: accountsData.accounts?.map((a: any) => ({
@@ -1178,6 +1183,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             displayName: a.displayName
           })) || []
         });
+
+        if (!accountsData.accounts || accountsData.accounts.length === 0) {
+          console.error('❌ NO ACCOUNTS FOUND! User may not have access to any GA4 accounts.');
+        }
 
         // Step 2: For each account, fetch properties using both v1alpha and v1beta
         for (const account of accountsData.accounts || []) {
@@ -1204,6 +1213,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               
               if (propertiesResponse.ok) {
                 const propertiesData = await propertiesResponse.json();
+                console.log(`Raw properties response:`, JSON.stringify(propertiesData, null, 2));
                 console.log(`Success! Properties data:`, {
                   propertiesCount: propertiesData.properties?.length || 0,
                   properties: propertiesData.properties?.map((p: any) => ({
@@ -1211,6 +1221,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     displayName: p.displayName
                   })) || []
                 });
+
+                if (!propertiesData.properties || propertiesData.properties.length === 0) {
+                  console.warn(`⚠️ Account ${account.displayName} has 0 properties`);
+                }
                 
                 for (const property of propertiesData.properties || []) {
                   properties.push({
