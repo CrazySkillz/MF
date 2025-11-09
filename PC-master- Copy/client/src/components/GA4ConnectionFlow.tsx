@@ -34,7 +34,27 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [showClientIdInput, setShowClientIdInput] = useState(false);
+  const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
+  const [isCheckingConfig, setIsCheckingConfig] = useState(true);
   const { toast } = useToast();
+
+  // Check if backend OAuth is configured
+  useEffect(() => {
+    const checkBackendOAuth = async () => {
+      try {
+        const response = await fetch('/api/auth/google/config');
+        const data = await response.json();
+        setIsOAuthConfigured(data.configured);
+        console.log('Backend OAuth configured:', data.configured);
+      } catch (error) {
+        console.error('Failed to check OAuth config:', error);
+        setIsOAuthConfigured(false);
+      } finally {
+        setIsCheckingConfig(false);
+      }
+    };
+    checkBackendOAuth();
+  }, []);
 
   const handleTokenConnect = async () => {
     console.log('GA4 Connect button clicked!', { campaignId, accessToken: accessToken.substring(0, 10) + '...', propertyId });
@@ -105,29 +125,90 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
   };
 
   const handleGoogleOAuth = async () => {
+    // If backend OAuth is configured, use it (marketing executive flow - no manual credentials needed)
+    if (isOAuthConfigured) {
+      setIsOAuthLoading(true);
+
+      try {
+        console.log('Using backend OAuth flow...');
+
+        // Get OAuth URL from backend (which has the credentials)
+        const response = await fetch('/api/auth/google/url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            campaignId,
+            returnUrl: window.location.href
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || data.error) {
+          throw new Error(data.error || 'Failed to generate OAuth URL');
+        }
+
+        console.log('Got OAuth URL from backend, opening popup...');
+
+        // Open OAuth popup - user just signs in with their Google account
+        const popup = window.open(
+          data.oauth_url,
+          'google_oauth',
+          'width=500,height=600,scrollbars=yes,resizable=yes'
+        );
+
+        if (!popup) {
+          throw new Error('Popup was blocked. Please allow popups and try again.');
+        }
+
+        toast({
+          title: "Authenticate with Google",
+          description: "Sign in with your Google account in the popup window.",
+          duration: 3000,
+        });
+
+        // Monitor for success (this will be implemented later with proper callback handling)
+        // For now, user will need to refresh after authorization
+
+      } catch (error) {
+        console.error('Backend OAuth flow error:', error);
+        setIsOAuthLoading(false);
+        toast({
+          title: "OAuth Failed",
+          description: error instanceof Error ? error.message : "Failed to start OAuth flow.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      return; // Don't continue to manual flow
+    }
+
+    // Fallback: Manual OAuth flow (for when backend OAuth isn't configured)
     if (!clientId || !clientSecret) {
       setShowClientIdInput(true);
       toast({
         title: "OAuth Credentials Required",
-        description: "Please enter both your Google OAuth Client ID and Client Secret to continue.",
+        description: "Backend OAuth not configured. Please enter credentials manually.",
         variant: "destructive"
       });
       return;
     }
 
     setIsOAuthLoading(true);
-    
+
     try {
       // Generate OAuth URL directly on client side
       const redirectUri = `${window.location.origin}/oauth-callback.html`;
       const scope = 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/analytics.edit';
       const responseType = 'code';
       const state = `campaign_${campaignId}`;
-      
+
       // Debug: Log the redirect URI being used
+      console.log('OAuth Debug - Using manual OAuth flow');
       console.log('OAuth Debug - Redirect URI being used:', redirectUri);
       console.log('OAuth Debug - Client ID:', clientId);
-      
+
       const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
         `client_id=${encodeURIComponent(clientId)}&` +
         `redirect_uri=${encodeURIComponent(redirectUri)}&` +
@@ -136,7 +217,7 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
         `state=${encodeURIComponent(state)}&` +
         `access_type=offline&` +
         `prompt=consent`;
-      
+
       console.log('OAuth Debug - Full OAuth URL:', oauthUrl);
       
       // Create OAuth callback handler
@@ -432,7 +513,8 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
 
           {!showPropertySelection ? (
             <div className="space-y-4">
-              {showClientIdInput && (
+              {/* Only show manual credential input if backend OAuth is NOT configured */}
+              {!isOAuthConfigured && showClientIdInput && (
                 <div className="space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border">
                   <div className="space-y-2">
                     <Label htmlFor="client-id">Google OAuth Client ID</Label>
@@ -461,11 +543,16 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
 
               <Button
                 onClick={handleGoogleOAuth}
-                disabled={isOAuthLoading || (!clientId || !clientSecret) && showClientIdInput}
+                disabled={isCheckingConfig || isOAuthLoading || (!isOAuthConfigured && (!clientId || !clientSecret) && showClientIdInput)}
                 size="lg"
                 className="w-full bg-blue-600 hover:bg-blue-700"
               >
-                {isOAuthLoading ? (
+                {isCheckingConfig ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Loading...
+                  </>
+                ) : isOAuthLoading ? (
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                     Connecting to Google...
