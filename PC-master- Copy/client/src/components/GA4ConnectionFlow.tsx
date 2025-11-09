@@ -251,7 +251,7 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
     try {
       // Generate OAuth URL directly on client side
       const redirectUri = `${window.location.origin}/oauth-callback.html`;
-      const scope = 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/analytics.edit';
+      const scope = 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/analytics.edit https://www.googleapis.com/auth/analytics.manage.users.readonly';
       const responseType = 'code';
       const state = `campaign_${campaignId}`;
 
