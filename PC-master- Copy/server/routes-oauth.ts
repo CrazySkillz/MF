@@ -484,6 +484,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Google Analytics OAuth endpoints
+  // Check if OAuth is configured on backend
+  app.get("/api/auth/google/config", (req, res) => {
+    const isConfigured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+    res.json({
+      configured: isConfigured,
+      redirectUri: `${req.protocol}://${req.get('host')}/auth/google/callback`
+    });
+  });
+
   app.post("/api/auth/google/url", (req, res) => {
     try {
       const { campaignId, returnUrl } = req.body;
