@@ -884,26 +884,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log('💾 Updating database with property:', { campaignId, propertyId, propertyName });
 
-      // First get the GA4 connection by campaignId
-      const ga4Connection = await storage.getPrimaryGA4Connection(campaignId);
-      if (ga4Connection) {
-        console.log('✅ Found existing GA4 connection in database:', ga4Connection.id);
-        await storage.updateGA4Connection(ga4Connection.id, {
-          propertyId,
-          propertyName
-        });
+      // Try to save to database, but don't fail if it doesn't work (in-memory is enough)
+      try {
+        // First get the GA4 connection by campaignId
+        const ga4Connection = await storage.getPrimaryGA4Connection(campaignId);
+        if (ga4Connection) {
+          console.log('✅ Found existing GA4 connection in database:', ga4Connection.id);
+          await storage.updateGA4Connection(ga4Connection.id, {
+            propertyId,
+            propertyName
+          });
 
-        console.log('✅ Updated database connection with property:', {
-          campaignId,
-          connectionId: ga4Connection.id,
-          propertyId,
-          propertyName
-        });
-      } else {
-        console.warn('⚠️ No GA4 connection found in database for campaign:', campaignId);
-        console.log('🔧 Creating new GA4 connection in database...');
+          console.log('✅ Updated database connection with property:', {
+            campaignId,
+            connectionId: ga4Connection.id,
+            propertyId,
+            propertyName
+          });
+        } else {
+          console.warn('⚠️ No GA4 connection found in database for campaign:', campaignId);
+          console.log('🔧 Creating new GA4 connection in database...');
 
-        try {
           await storage.createGA4Connection({
             campaignId,
             propertyId,
@@ -916,9 +917,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             serviceAccountKey: null
           });
           console.log('✅ Created new GA4 connection in database');
-        } catch (dbError) {
-          console.error('❌ Failed to create GA4 connection in database:', dbError);
         }
+      } catch (dbError) {
+        console.warn('⚠️ Database save failed (continuing with in-memory storage):', dbError instanceof Error ? dbError.message : dbError);
+        // Continue anyway - in-memory storage is sufficient for functionality
       }
 
       // Store in real GA4 connections for metrics access
