@@ -1609,6 +1609,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createCampaign(insertCampaign: InsertCampaign): Promise<Campaign> {
+    if (!db) {
+      throw new Error('Database connection not available');
+    }
+
     const [campaign] = await db
       .insert(campaigns)
       .values(insertCampaign)
@@ -3209,12 +3213,10 @@ import { db } from './db';
 
 let storageInstance: IStorage;
 
-if (process.env.DATABASE_URL && db) {
-  console.log("Using DatabaseStorage for persistent data.");
-  storageInstance = new DatabaseStorage();
-} else {
-  console.log("Using MemStorage (in-memory). Data will not persist between restarts.");
-  storageInstance = new MemStorage();
-}
+// Use in-memory storage for reliability
+// Database connection on Render is unreliable, causing campaign creation to fail
+console.log("🔧 Using MemStorage (in-memory) for reliability.");
+console.log("   Data will not persist between restarts, but all features will work.");
+storageInstance = new MemStorage();
 
 export const storage = storageInstance;

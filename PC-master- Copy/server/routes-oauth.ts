@@ -37,14 +37,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/campaigns", async (req, res) => {
     try {
+      console.log('📝 Campaign creation request:', req.body);
       const validatedData = insertCampaignSchema.parse(req.body);
+      console.log('✅ Campaign data validated:', validatedData);
+
       const campaign = await storage.createCampaign(validatedData);
+      console.log('✅ Campaign created successfully:', campaign.id);
+
       res.status(201).json(campaign);
     } catch (error) {
+      console.error('❌ Campaign creation error:', error);
+
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid campaign data", errors: error.errors });
+        console.error('Validation errors:', error.errors);
+        return res.status(400).json({
+          message: "Invalid campaign data",
+          errors: error.errors
+        });
       }
-      res.status(500).json({ message: "Failed to create campaign" });
+
+      res.status(500).json({
+        message: "Failed to create campaign",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
