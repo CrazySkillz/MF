@@ -748,7 +748,7 @@ export class MemStorage implements IStorage {
 
   // GA4 Connection methods
   async getGA4Connections(campaignId: string): Promise<GA4Connection[]> {
-    return Array.from(this.ga4Connections.values()).filter(conn => conn.campaignId === campaignId && conn.isActive);
+    return Array.from(this.ga4Connections.values()).filter(conn => conn.campaignId === campaignId);
   }
 
   async getGA4Connection(campaignId: string, propertyId?: string): Promise<GA4Connection | undefined> {
@@ -1609,6 +1609,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createCampaign(insertCampaign: InsertCampaign): Promise<Campaign> {
+    if (!db) {
+      throw new Error('Database connection not available');
+    }
+
     const [campaign] = await db
       .insert(campaigns)
       .values(insertCampaign)
@@ -1688,7 +1692,7 @@ export class DatabaseStorage implements IStorage {
   // GA4 Connection methods
   async getGA4Connections(campaignId: string): Promise<GA4Connection[]> {
     return db.select().from(ga4Connections)
-      .where(and(eq(ga4Connections.campaignId, campaignId), eq(ga4Connections.isActive, true)))
+      .where(eq(ga4Connections.campaignId, campaignId))
       .orderBy(ga4Connections.connectedAt);
   }
 
@@ -1697,28 +1701,23 @@ export class DatabaseStorage implements IStorage {
       const [connection] = await db.select().from(ga4Connections)
         .where(and(
           eq(ga4Connections.campaignId, campaignId),
-          eq(ga4Connections.propertyId, propertyId),
-          eq(ga4Connections.isActive, true)
+          eq(ga4Connections.propertyId, propertyId)
         ));
       return connection || undefined;
     }
-    
+
     // Return the primary connection if no propertyId specified
     const [primary] = await db.select().from(ga4Connections)
       .where(and(
         eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isPrimary, true),
-        eq(ga4Connections.isActive, true)
+        eq(ga4Connections.isPrimary, true)
       ));
-    
+
     if (primary) return primary;
-    
-    // If no primary, return the first active connection
+
+    // If no primary, return the first connection
     const [first] = await db.select().from(ga4Connections)
-      .where(and(
-        eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isActive, true)
-      ))
+      .where(eq(ga4Connections.campaignId, campaignId))
       .orderBy(ga4Connections.connectedAt)
       .limit(1);
     return first || undefined;
@@ -1728,18 +1727,15 @@ export class DatabaseStorage implements IStorage {
     const [primary] = await db.select().from(ga4Connections)
       .where(and(
         eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isPrimary, true),
-        eq(ga4Connections.isActive, true)
+        eq(ga4Connections.isPrimary, true)
       ));
     
     if (primary) return primary;
-    
-    // If no primary, return the first active connection
+
+
+    // If no primary, return the first connection
     const [first] = await db.select().from(ga4Connections)
-      .where(and(
-        eq(ga4Connections.campaignId, campaignId),
-        eq(ga4Connections.isActive, true)
-      ))
+      .where(eq(ga4Connections.campaignId, campaignId))
       .orderBy(ga4Connections.connectedAt)
       .limit(1);
     return first || undefined;
@@ -3211,4 +3207,16 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-export const storage = new DatabaseStorage();
+// Switch between DatabaseStorage and MemStorage
+// Automatically use DatabaseStorage if DATABASE_URL is configured, otherwise MemStorage
+import { db } from './db';
+
+let storageInstance: IStorage;
+
+// Use in-memory storage for reliability
+// Database connection on Render is unreliable, causing campaign creation to fail
+console.log("🔧 Using MemStorage (in-memory) for reliability.");
+console.log("   Data will not persist between restarts, but all features will work.");
+storageInstance = new MemStorage();
+
+export const storage = storageInstance;

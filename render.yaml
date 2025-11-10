@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: performancecore
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: cd "PC-master- Copy" && npm install --include=dev && npm run build && npm run db:push
+    startCommand: cd "PC-master- Copy" && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PORT
+        value: 10000

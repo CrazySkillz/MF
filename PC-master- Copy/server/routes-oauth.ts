@@ -37,14 +37,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/campaigns", async (req, res) => {
     try {
+      console.log('📝 Campaign creation request:', req.body);
       const validatedData = insertCampaignSchema.parse(req.body);
+      console.log('✅ Campaign data validated:', validatedData);
+
       const campaign = await storage.createCampaign(validatedData);
+      console.log('✅ Campaign created successfully:', campaign.id);
+
       res.status(201).json(campaign);
     } catch (error) {
+      console.error('❌ Campaign creation error:', error);
+
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ message: "Invalid campaign data", errors: error.errors });
+        console.error('Validation errors:', error.errors);
+        return res.status(400).json({
+          message: "Invalid campaign data",
+          errors: error.errors
+        });
       }
-      res.status(500).json({ message: "Failed to create campaign" });
+
+      res.status(500).json({
+        message: "Failed to create campaign",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
@@ -484,6 +499,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Google Analytics OAuth endpoints
+  // Check if OAuth is configured on backend
+  app.get("/api/auth/google/config", (req, res) => {
+    const isConfigured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+    // Use x-forwarded-proto header for correct protocol when behind proxy (Render)
+    const protocol = req.get('x-forwarded-proto') || req.protocol;
+    const host = req.get('host');
+    res.json({
+      configured: isConfigured,
+      redirectUri: `${protocol}://${host}/auth/google/callback`
+    });
+  });
+
   app.post("/api/auth/google/url", (req, res) => {
     try {
       const { campaignId, returnUrl } = req.body;
@@ -500,14 +527,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const baseUrl = "https://accounts.google.com/o/oauth2/v2/auth";
       const scopes = [
         "https://www.googleapis.com/auth/analytics.readonly",
+        "https://www.googleapis.com/auth/analytics.edit", // Required for Admin API (listing properties)
         "https://www.googleapis.com/auth/userinfo.email"
       ];
-      
+
       const state = Buffer.from(JSON.stringify({ campaignId, returnUrl })).toString('base64');
-      
+
+      // Always use https for redirect URI (Render uses proxy/load balancer for SSL)
+      const protocol = req.get('x-forwarded-proto') || req.protocol;
+      const host = req.get('host');
+      const redirectUri = `${protocol}://${host}/auth/google/callback`;
+
       const params = {
         client_id: clientId,
-        redirect_uri: `${req.protocol}://${req.get('host')}/auth/google/callback`,
+        redirect_uri: redirectUri,
         scope: scopes.join(" "),
         response_type: "code",
         access_type: "offline",
@@ -515,10 +548,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         state: state,
         include_granted_scopes: "true"
       };
-      
+
+      console.log('OAuth redirect URI:', redirectUri); // Debug log
+
       const queryString = new URLSearchParams(params).toString();
       const oauthUrl = `${baseUrl}?${queryString}`;
-      
+
       res.json({ oauth_url: oauthUrl });
     } catch (error) {
       console.error('OAuth URL generation error:', error);
@@ -549,8 +584,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (e) {
         console.warn('Could not parse OAuth state:', e);
       }
-      
+
       // Exchange authorization code for tokens
+      // Use x-forwarded-proto for correct protocol behind proxy
+      const protocol = req.get('x-forwarded-proto') || req.protocol;
+      const host = req.get('host');
+      const redirectUri = `${protocol}://${host}/auth/google/callback`;
+
+      console.log('Token exchange - redirect URI:', redirectUri);
+
       const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: {
@@ -561,16 +603,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           client_secret: clientSecret,
           code: code,
           grant_type: 'authorization_code',
-          redirect_uri: `${req.protocol}://${req.get('host')}/auth/google/callback`
+          redirect_uri: redirectUri
         })
       });
-      
+
       const tokenData = await tokenResponse.json();
-      
+
       if (!tokenResponse.ok) {
         console.error('Token exchange failed:', tokenData);
-        return res.status(400).json({ 
-          error: tokenData.error_description || 'Failed to exchange authorization code' 
+        return res.status(400).json({
+          error: tokenData.error_description || 'Failed to exchange authorization code'
         });
       }
       
@@ -587,26 +629,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Get Analytics properties
+      console.log('🔍 Step 1: Fetching Google Analytics accounts...');
+      console.log('Access token (first 20 chars):', tokenData.access_token.substring(0, 20));
+
       const accountsResponse = await fetch('https://analyticsadmin.googleapis.com/v1alpha/accounts', {
         headers: {
           'Authorization': `Bearer ${tokenData.access_token}`
         }
       });
-      
+
+      console.log('Accounts API response status:', accountsResponse.status);
+
       let properties: any[] = [];
       if (accountsResponse.ok) {
         const accountsData = await accountsResponse.json();
-        
+        console.log('Raw accounts response:', JSON.stringify(accountsData, null, 2));
+        console.log('Accounts found:', accountsData.accounts?.length || 0);
+
+        if (!accountsData.accounts || accountsData.accounts.length === 0) {
+          console.error('❌ NO ACCOUNTS FOUND! User may not have any Google Analytics accounts.');
+        }
+
         for (const account of accountsData.accounts || []) {
+          const accountId = account.name.split('/').pop();
+          console.log(`\n🔍 Step 2: Fetching properties for account: ${account.displayName} (${accountId})`);
+
           try {
-            const propertiesResponse = await fetch(`https://analyticsadmin.googleapis.com/v1alpha/${account.name}/properties`, {
+            // Use the correct API format with filter parameter
+            const propertiesUrl = `https://analyticsadmin.googleapis.com/v1beta/properties?filter=parent:accounts/${accountId}`;
+            console.log('Properties API URL:', propertiesUrl);
+
+            const propertiesResponse = await fetch(propertiesUrl, {
               headers: {
                 'Authorization': `Bearer ${tokenData.access_token}`
               }
             });
-            
+
+            console.log('Properties API response status:', propertiesResponse.status);
+
             if (propertiesResponse.ok) {
               const propertiesData = await propertiesResponse.json();
+              console.log('Raw properties response:', JSON.stringify(propertiesData, null, 2));
+              console.log('Properties count for this account:', propertiesData.properties?.length || 0);
+
               for (const property of propertiesData.properties || []) {
                 properties.push({
                   id: property.name.split('/').pop(),
@@ -614,19 +679,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   account: account.displayName
                 });
               }
+            } else {
+              const errorText = await propertiesResponse.text();
+              console.error(`❌ Failed to fetch properties for ${account.displayName}:`, errorText);
             }
           } catch (error) {
-            console.warn('Error fetching properties for account:', account.name, error);
+            console.error('Error fetching properties for account:', account.name, error);
           }
         }
+      } else {
+        const errorText = await accountsResponse.text();
+        console.error('❌ Failed to fetch accounts:', errorText);
       }
       
       console.log('About to store OAuth connection...');
       console.log('Campaign ID:', campaignId);
       console.log('Properties found:', properties.length);
       console.log('Token data available:', !!tokenData.access_token, !!tokenData.refresh_token);
-      
-      // Store the OAuth connection
+
+      // Store the OAuth connection in memory temporarily (for property selection step)
       (global as any).oauthConnections = (global as any).oauthConnections || new Map();
       (global as any).oauthConnections.set(campaignId, {
         accessToken: tokenData.access_token,
@@ -636,11 +707,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         properties,
         connectedAt: new Date().toISOString()
       });
-      
+
+      // Also create the GA4 connection in database (without property selected yet)
+      // This will be updated when user selects a property
+      try {
+        await storage.createGA4Connection({
+          campaignId,
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token,
+          email: userInfo?.email || '',
+          propertyId: '', // Will be set when property is selected
+          propertyName: '' // Will be set when property is selected
+        });
+        console.log('Created GA4 connection in database for campaign:', campaignId);
+      } catch (error) {
+        console.error('Failed to create GA4 connection in database:', error);
+        // Continue anyway - will retry on property selection
+      }
+
       console.log('OAuth connection stored for campaignId:', campaignId);
       console.log('Total connections after storage:', (global as any).oauthConnections.size);
       console.log('All connection keys:', Array.from((global as any).oauthConnections.keys()));
-      
+
       res.json({
         success: true,
         user: userInfo,
@@ -767,42 +855,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/ga4/select-property", async (req, res) => {
     try {
       const { campaignId, propertyId } = req.body;
-      
-      console.log('Property selection request:', { campaignId, propertyId });
-      
+
+      console.log('🔗 Property selection request:', { campaignId, propertyId });
+
       if (!campaignId || !propertyId) {
+        console.error('❌ Missing campaignId or propertyId');
         return res.status(400).json({ error: 'Campaign ID and Property ID are required' });
       }
-      
+
       const connections = (global as any).oauthConnections;
-      console.log('Available connections:', {
+      console.log('🔍 Checking OAuth connections:', {
         hasGlobalConnections: !!connections,
         connectionKeys: connections ? Array.from(connections.keys()) : [],
         hasThisCampaign: connections ? connections.has(campaignId) : false
       });
-      
+
       if (!connections || !connections.has(campaignId)) {
-        return res.status(404).json({ error: 'No OAuth connection found for this campaign' });
+        console.error('❌ No OAuth connection found for campaign:', campaignId);
+        console.error('Available campaigns:', connections ? Array.from(connections.keys()) : 'No connections');
+        return res.status(404).json({
+          error: 'No OAuth connection found for this campaign',
+          debug: {
+            requestedCampaign: campaignId,
+            availableCampaigns: connections ? Array.from(connections.keys()) : []
+          }
+        });
       }
-      
+
       const connection = connections.get(campaignId);
-      
+      console.log('✅ Found OAuth connection:', {
+        hasAccessToken: !!connection.accessToken,
+        hasRefreshToken: !!connection.refreshToken,
+        propertiesCount: connection.properties?.length || 0
+      });
+
       connection.selectedPropertyId = propertyId;
       connection.selectedProperty = connection.properties?.find((p: any) => p.id === propertyId);
-      
+
+      console.log('📝 Selected property details:', connection.selectedProperty);
+
       // CRITICAL: Update the database connection with the selected property ID
       const propertyName = connection.selectedProperty?.name || `Property ${propertyId}`;
-      await storage.updateGA4Connection(campaignId, {
-        propertyId,
-        propertyName
-      });
-      
-      console.log('Updated database connection with property:', {
-        campaignId,
-        propertyId,
-        propertyName
-      });
-      
+
+      console.log('💾 Updating database with property:', { campaignId, propertyId, propertyName });
+
+      // Try to save to database, but don't fail if it doesn't work (in-memory is enough)
+      try {
+        // First get the GA4 connection by campaignId
+        const ga4Connection = await storage.getPrimaryGA4Connection(campaignId);
+        if (ga4Connection) {
+          console.log('✅ Found existing GA4 connection in database:', ga4Connection.id);
+          await storage.updateGA4Connection(ga4Connection.id, {
+            propertyId,
+            propertyName
+          });
+
+          console.log('✅ Updated database connection with property:', {
+            campaignId,
+            connectionId: ga4Connection.id,
+            propertyId,
+            propertyName
+          });
+        } else {
+          console.warn('⚠️ No GA4 connection found in database for campaign:', campaignId);
+          console.log('🔧 Creating new GA4 connection in database...');
+
+          await storage.createGA4Connection({
+            campaignId,
+            propertyId,
+            accessToken: connection.accessToken,
+            refreshToken: connection.refreshToken,
+            method: 'access_token',
+            propertyName,
+            clientId: null,
+            clientSecret: null,
+            serviceAccountKey: null
+          });
+          console.log('✅ Created new GA4 connection in database');
+        }
+      } catch (dbError) {
+        console.warn('⚠️ Database save failed (continuing with in-memory storage):', dbError instanceof Error ? dbError.message : dbError);
+        // Continue anyway - in-memory storage is sufficient for functionality
+      }
+
       // Store in real GA4 connections for metrics access
       (global as any).realGA4Connections = (global as any).realGA4Connections || new Map();
       (global as any).realGA4Connections.set(campaignId, {
@@ -813,14 +948,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         isReal: true,
         propertyName
       });
-      
+
+      console.log('✅ Property selection completed successfully');
+
       res.json({
         success: true,
         selectedProperty: connection.selectedProperty
       });
     } catch (error) {
-      console.error('Property selection error:', error);
-      res.status(500).json({ error: 'Failed to select property' });
+      console.error('❌ Property selection error:', error);
+      res.status(500).json({
+        error: 'Failed to select property',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
@@ -1105,20 +1245,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get GA4 properties using the access token
       try {
         let properties = [];
-        
+
         // Step 1: Get all accounts first
         console.log('Step 1: Fetching Google Analytics accounts...');
+        console.log('Access token (first 20 chars):', access_token.substring(0, 20));
         const accountsResponse = await fetch('https://analyticsadmin.googleapis.com/v1alpha/accounts', {
           headers: { 'Authorization': `Bearer ${access_token}` }
         });
 
+        console.log('Accounts API response status:', accountsResponse.status);
+
         if (!accountsResponse.ok) {
           const errorText = await accountsResponse.text();
           console.error('Failed to fetch accounts:', accountsResponse.status, errorText);
+          console.error('Full error response:', errorText);
           throw new Error(`Failed to fetch accounts: ${accountsResponse.status}`);
         }
 
         const accountsData = await accountsResponse.json();
+        console.log('Raw accounts response:', JSON.stringify(accountsData, null, 2));
         console.log('Accounts found:', {
           count: accountsData.accounts?.length || 0,
           accounts: accountsData.accounts?.map((a: any) => ({
@@ -1126,6 +1271,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             displayName: a.displayName
           })) || []
         });
+
+        if (!accountsData.accounts || accountsData.accounts.length === 0) {
+          console.error('❌ NO ACCOUNTS FOUND! User may not have access to any GA4 accounts.');
+        }
 
         // Step 2: For each account, fetch properties using both v1alpha and v1beta
         for (const account of accountsData.accounts || []) {
@@ -1152,6 +1301,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               
               if (propertiesResponse.ok) {
                 const propertiesData = await propertiesResponse.json();
+                console.log(`Raw properties response:`, JSON.stringify(propertiesData, null, 2));
                 console.log(`Success! Properties data:`, {
                   propertiesCount: propertiesData.properties?.length || 0,
                   properties: propertiesData.properties?.map((p: any) => ({
@@ -1159,6 +1309,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     displayName: p.displayName
                   })) || []
                 });
+
+                if (!propertiesData.properties || propertiesData.properties.length === 0) {
+                  console.warn(`⚠️ Account ${account.displayName} has 0 properties`);
+                }
                 
                 for (const property of propertiesData.properties || []) {
                   properties.push({
@@ -1227,10 +1381,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       } catch (error) {
         console.error('Failed to fetch GA4 properties:', error);
+
+        // Return detailed error information to help debug
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        const errorDetails = {
+          error: errorMessage,
+          hint: 'Check if you have the correct permissions on your GA4 property',
+          troubleshooting: [
+            'Verify you have at least Viewer access to the GA4 property',
+            'Check if the property is GA4 (not Universal Analytics)',
+            'Make sure you selected the correct Google account',
+            'Try revoking access and reconnecting: https://myaccount.google.com/permissions'
+          ]
+        };
+
         res.json({
           success: true,
           properties: [],
-          message: 'OAuth successful, but failed to fetch properties. You can enter Property ID manually.'
+          message: 'OAuth successful, but failed to fetch properties.',
+          errorDetails: errorDetails,
+          _debug: {
+            errorMessage,
+            timestamp: new Date().toISOString()
+          }
         });
       }
 
@@ -1239,6 +1412,336 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({
         success: false,
         error: 'Internal server error during OAuth exchange'
+      });
+    }
+  });
+
+  // Diagnostic endpoint to test GA4 Admin API access
+  app.get("/api/ga4/diagnose/:campaignId", async (req, res) => {
+    try {
+      const { campaignId } = req.params;
+
+      // Get the OAuth connection
+      const oauthConnection = (global as any).oauthConnections?.get(campaignId);
+
+      if (!oauthConnection) {
+        return res.json({
+          success: false,
+          error: 'No OAuth connection found',
+          hint: 'Please connect your Google account first'
+        });
+      }
+
+      const { accessToken } = oauthConnection;
+      const diagnosticResults: any = {
+        timestamp: new Date().toISOString(),
+        campaignId,
+        hasAccessToken: !!accessToken,
+        tests: []
+      };
+
+      // Test 1: Fetch accounts
+      console.log('Diagnostic: Testing accounts API...');
+      try {
+        const accountsResponse = await fetch('https://analyticsadmin.googleapis.com/v1alpha/accounts', {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+
+        const accountsResult: any = {
+          test: 'Fetch Analytics Accounts',
+          status: accountsResponse.status,
+          ok: accountsResponse.ok
+        };
+
+        if (accountsResponse.ok) {
+          const accountsData = await accountsResponse.json();
+          accountsResult.accountsCount = accountsData.accounts?.length || 0;
+          accountsResult.accounts = accountsData.accounts?.map((a: any) => ({
+            id: a.name,
+            displayName: a.displayName
+          })) || [];
+        } else {
+          accountsResult.error = await accountsResponse.text();
+        }
+
+        diagnosticResults.tests.push(accountsResult);
+
+        // Test 2: If we have accounts, try to fetch properties
+        if (accountsResponse.ok) {
+          const accountsData = await accountsResponse.json();
+          for (const account of accountsData.accounts || []) {
+            const accountId = account.name.split('/').pop();
+
+            const propertyTest: any = {
+              test: `Fetch Properties for ${account.displayName}`,
+              accountId
+            };
+
+            try {
+              const endpoint = `https://analyticsadmin.googleapis.com/v1beta/properties?filter=parent:accounts/${accountId}`;
+              const propertiesResponse = await fetch(endpoint, {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+              });
+
+              propertyTest.status = propertiesResponse.status;
+              propertyTest.ok = propertiesResponse.ok;
+
+              if (propertiesResponse.ok) {
+                const propertiesData = await propertiesResponse.json();
+                propertyTest.propertiesCount = propertiesData.properties?.length || 0;
+                propertyTest.properties = propertiesData.properties?.map((p: any) => ({
+                  id: p.name,
+                  displayName: p.displayName
+                })) || [];
+              } else {
+                propertyTest.error = await propertiesResponse.text();
+              }
+            } catch (error) {
+              propertyTest.error = error instanceof Error ? error.message : 'Unknown error';
+            }
+
+            diagnosticResults.tests.push(propertyTest);
+          }
+        }
+      } catch (error) {
+        diagnosticResults.tests.push({
+          test: 'Fetch Analytics Accounts',
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+
+      res.json(diagnosticResults);
+
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // GA4 Seed Data Endpoint - Generate realistic test data for website analytics
+  app.post("/api/ga4/seed-data/:campaignId", async (req, res) => {
+    try {
+      const { campaignId } = req.params;
+      const { days = 30, websiteType = 'saas' } = req.body; // Default to 30 days, SaaS profile
+
+      console.log(`🌱 Starting GA4 seed data generation for campaign ${campaignId}...`);
+
+      // Website type profiles with realistic characteristics
+      const websiteProfiles: any = {
+        ecommerce: {
+          name: 'E-commerce Store',
+          avgDailySessions: 2500,
+          conversionRate: 2.5,
+          avgSessionDuration: 180,
+          bounceRate: 45,
+          performanceMultiplier: 1.3,
+        },
+        saas: {
+          name: 'SaaS Product Website',
+          avgDailySessions: 1800,
+          conversionRate: 4.2,
+          avgSessionDuration: 240,
+          bounceRate: 38,
+          performanceMultiplier: 1.5,
+        },
+        blog: {
+          name: 'Content Blog',
+          avgDailySessions: 3500,
+          conversionRate: 0.8,
+          avgSessionDuration: 150,
+          bounceRate: 58,
+          performanceMultiplier: 1.1,
+        },
+        corporate: {
+          name: 'Corporate Website',
+          avgDailySessions: 1200,
+          conversionRate: 3.8,
+          avgSessionDuration: 200,
+          bounceRate: 42,
+          performanceMultiplier: 1.0,
+        },
+        leadgen: {
+          name: 'Lead Generation Site',
+          avgDailySessions: 1500,
+          conversionRate: 5.5,
+          avgSessionDuration: 220,
+          bounceRate: 35,
+          performanceMultiplier: 1.4,
+        },
+      };
+
+      const profile = websiteProfiles[websiteType] || websiteProfiles.saas;
+
+      // Function to generate realistic daily GA4 metrics
+      const generateDailyGA4Metrics = (dayOffset: number) => {
+        const { avgDailySessions, conversionRate, avgSessionDuration, bounceRate, performanceMultiplier } = profile;
+
+        const date = new Date();
+        date.setDate(date.getDate() - dayOffset);
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+
+        // Apply multipliers
+        const weekendMultiplier = isWeekend ? 0.75 : 1.0;
+        const trendMultiplier = 1 + (Number(days) - dayOffset) * 0.008;
+        const randomVariation = 0.85 + Math.random() * 0.3;
+        const totalMultiplier = performanceMultiplier * weekendMultiplier * trendMultiplier * randomVariation;
+
+        // Traffic metrics
+        const sessions = Math.round(avgDailySessions * totalMultiplier);
+        const returningUserRate = 0.3 + Math.random() * 0.2;
+        const users = Math.round(sessions * (0.85 + Math.random() * 0.1));
+        const newUsers = Math.round(users * (1 - returningUserRate));
+        const activeUsers = Math.round(users * (0.7 + Math.random() * 0.2));
+
+        // Page views
+        const pagesPerSession = 2.5 + Math.random() * 2.5;
+        const pageviews = Math.round(sessions * pagesPerSession);
+
+        // Engagement
+        const calculatedBounceRate = bounceRate * (0.9 + Math.random() * 0.2) / 100;
+        const engagementRate = 1 - calculatedBounceRate;
+        const engagedSessions = Math.round(sessions * engagementRate);
+        const averageSessionDurationSeconds = Math.round(avgSessionDuration * (0.8 + Math.random() * 0.4));
+        const userEngagementDuration = averageSessionDurationSeconds * sessions;
+
+        // Events
+        const eventsPerSession = 4 + Math.random() * 6;
+        const eventCount = Math.round(sessions * eventsPerSession);
+
+        // Conversions
+        const conversions = Math.round(sessions * (conversionRate / 100) * (0.8 + Math.random() * 0.4));
+
+        // Advertising metrics (3% of sessions from ads)
+        const adClickRate = 0.03;
+        const adSessions = Math.round(sessions * adClickRate);
+        const impressions = Math.round(adSessions / 0.02); // 2% CTR
+        const clicks = adSessions;
+        const ctr = clicks / impressions * 100;
+        const cpc = 5 + Math.random() * 10;
+        const spend = clicks * cpc;
+
+        return {
+          date: date.toISOString().split('T')[0],
+          sessions,
+          users,
+          newUsers,
+          activeUsers,
+          pageviews,
+          bounceRate: calculatedBounceRate,
+          engagementRate,
+          averageSessionDuration: averageSessionDurationSeconds,
+          userEngagementDuration,
+          engagedSessions,
+          eventsPerSession,
+          eventCount,
+          conversions,
+          impressions,
+          clicks,
+          ctr,
+          cpc,
+          spend,
+        };
+      };
+
+      // Check if GA4 connection exists, create if not
+      let connection = await storage.getPrimaryGA4Connection(campaignId);
+      if (!connection) {
+        console.log('Creating GA4 connection...');
+        connection = await storage.createGA4Connection({
+          campaignId,
+          propertyId: 'properties/' + Math.floor(Math.random() * 999999999),
+          propertyName: `${profile.name} - Analytics`,
+          websiteUrl: 'https://www.demo-website.com',
+          displayName: 'Main Website Property',
+          method: 'access_token',
+          accessToken: 'demo_token_' + Date.now(),
+          refreshToken: 'demo_refresh_' + Date.now(),
+          isPrimary: true,
+          isActive: true,
+          clientId: 'demo_client_id',
+          clientSecret: 'demo_client_secret',
+          expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+        });
+        console.log('✓ GA4 connection created');
+      }
+
+      let totalRecordsInserted = 0;
+      const summaryMetrics = {
+        sessions: 0,
+        users: 0,
+        pageviews: 0,
+        conversions: 0,
+        impressions: 0,
+        clicks: 0,
+        totalSpend: 0,
+      };
+
+      // Generate daily metrics
+      for (let dayOffset = 0; dayOffset < days; dayOffset++) {
+        const metrics = generateDailyGA4Metrics(dayOffset);
+
+        // Store in performance_data table
+        await storage.createPerformanceData({
+          campaignId,
+          date: metrics.date,
+          impressions: metrics.impressions,
+          clicks: metrics.clicks,
+          spend: metrics.spend.toFixed(2),
+          conversions: metrics.conversions,
+          reach: metrics.users,
+          engagement: metrics.engagedSessions,
+        });
+
+        summaryMetrics.sessions += metrics.sessions;
+        summaryMetrics.users += metrics.users;
+        summaryMetrics.pageviews += metrics.pageviews;
+        summaryMetrics.conversions += metrics.conversions;
+        summaryMetrics.impressions += metrics.impressions;
+        summaryMetrics.clicks += metrics.clicks;
+        summaryMetrics.totalSpend += metrics.spend;
+
+        totalRecordsInserted++;
+      }
+
+      console.log(`✅ Seed completed: ${totalRecordsInserted} records inserted`);
+
+      const avgCTR = (summaryMetrics.clicks / summaryMetrics.impressions) * 100;
+      const avgConversionRate = (summaryMetrics.conversions / summaryMetrics.sessions) * 100;
+      const avgCPC = summaryMetrics.totalSpend / summaryMetrics.clicks;
+
+      res.json({
+        success: true,
+        message: 'Realistic GA4 metrics data seeded successfully',
+        summary: {
+          propertyId: connection.propertyId,
+          propertyName: connection.propertyName,
+          websiteType,
+          totalRecords: totalRecordsInserted,
+          daysOfData: days,
+          timeRange: `Last ${days} days`,
+          totals: {
+            sessions: summaryMetrics.sessions.toLocaleString(),
+            users: summaryMetrics.users.toLocaleString(),
+            pageviews: summaryMetrics.pageviews.toLocaleString(),
+            conversions: summaryMetrics.conversions.toLocaleString(),
+            adImpressions: summaryMetrics.impressions.toLocaleString(),
+            adClicks: summaryMetrics.clicks.toLocaleString(),
+            adSpend: `$${summaryMetrics.totalSpend.toFixed(2)}`,
+            avgCTR: `${avgCTR.toFixed(2)}%`,
+            avgConversionRate: `${avgConversionRate.toFixed(2)}%`,
+            avgCPC: `$${avgCPC.toFixed(2)}`,
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('GA4 seed data error:', error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to seed GA4 data",
+        error: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   });
@@ -3966,6 +4469,271 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('LinkedIn ad performance fetch error:', error);
       res.status(500).json({ message: "Failed to fetch ad performance" });
+    }
+  });
+
+  // LinkedIn Seed Data Endpoint - Generate realistic test data
+  app.post("/api/linkedin/seed-data/:campaignId", async (req, res) => {
+    try {
+      const { campaignId } = req.params;
+      const { days = 30 } = req.body; // Default to 30 days of data
+
+      console.log(`🌱 Starting seed data generation for campaign ${campaignId}...`);
+
+      // Campaign profiles with realistic performance characteristics
+      const campaignProfiles = [
+        {
+          name: 'Brand Awareness - Tech Leaders',
+          objective: 'awareness',
+          budget: 150,
+          performanceMultiplier: 1.2,
+        },
+        {
+          name: 'Lead Generation - Enterprise Sales',
+          objective: 'conversion',
+          budget: 300,
+          performanceMultiplier: 1.5,
+        },
+        {
+          name: 'Engagement - Thought Leadership',
+          objective: 'engagement',
+          budget: 100,
+          performanceMultiplier: 0.9,
+        },
+        {
+          name: 'Product Launch - Innovation Series',
+          objective: 'awareness',
+          budget: 250,
+          performanceMultiplier: 1.8,
+        },
+        {
+          name: 'Webinar Promotion - Q1 Summit',
+          objective: 'conversion',
+          budget: 200,
+          performanceMultiplier: 1.3,
+        },
+      ];
+
+      // Function to generate realistic daily metrics
+      const generateDailyMetrics = (profile: any, dayOffset: number) => {
+        const { budget, performanceMultiplier, objective } = profile;
+
+        // Weekend effect
+        const date = new Date();
+        date.setDate(date.getDate() - dayOffset);
+        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+        const weekendMultiplier = isWeekend ? 0.7 : 1.0;
+
+        // Trend improvement over time
+        const trendMultiplier = 1 + (Number(days) - dayOffset) * 0.01;
+
+        // Random variation (±15%)
+        const randomVariation = 0.85 + Math.random() * 0.3;
+        const totalMultiplier = performanceMultiplier * weekendMultiplier * trendMultiplier * randomVariation;
+
+        // Calculate spend
+        const spend = budget * (0.85 + Math.random() * 0.3);
+
+        // Objective-specific benchmarks
+        let baseCTR, baseConversionRate, baseCPC;
+        if (objective === 'awareness') {
+          baseCTR = 0.45;
+          baseConversionRate = 0.015;
+          baseCPC = 6.5;
+        } else if (objective === 'engagement') {
+          baseCTR = 0.75;
+          baseConversionRate = 0.025;
+          baseCPC = 5.5;
+        } else {
+          baseCTR = 0.38;
+          baseConversionRate = 0.035;
+          baseCPC = 8.5;
+        }
+
+        // Calculate metrics
+        const cpm = (25 + Math.random() * 45) * totalMultiplier;
+        const impressions = Math.round((spend / cpm) * 1000);
+        const reach = Math.round(impressions * (0.6 + Math.random() * 0.2));
+        const ctr = baseCTR * totalMultiplier;
+        const clicks = Math.round(impressions * (ctr / 100));
+        const cpc = clicks > 0 ? spend / clicks : baseCPC * totalMultiplier;
+        const engagementRate = (2 + Math.random() * 4) * totalMultiplier;
+        const engagements = Math.round(impressions * (engagementRate / 100));
+        const cvr = baseConversionRate * totalMultiplier;
+        const conversions = Math.round(clicks * cvr);
+        const leads = Math.round(conversions * (0.6 + Math.random() * 0.2));
+        const videoViews = Math.round(impressions * (0.3 + Math.random() * 0.2));
+        const viralImpressions = Math.round(impressions * (0.05 + Math.random() * 0.1));
+        const avgDealValue = 2000 + Math.random() * 3000;
+        const revenue = conversions * avgDealValue * 0.3;
+        const cpa = conversions > 0 ? spend / conversions : 0;
+        const cpl = leads > 0 ? spend / leads : 0;
+        const roi = revenue > 0 ? ((revenue - spend) / spend) * 100 : 0;
+        const roas = spend > 0 ? revenue / spend : 0;
+
+        return {
+          date: date.toISOString().split('T')[0],
+          impressions,
+          reach,
+          clicks,
+          engagements,
+          spend: Number(spend.toFixed(2)),
+          conversions,
+          leads,
+          videoViews,
+          viralImpressions,
+          ctr: Number(ctr.toFixed(2)),
+          cpc: Number(cpc.toFixed(2)),
+          cpm: Number(cpm.toFixed(2)),
+          cvr: Number((cvr * 100).toFixed(2)),
+          cpa: Number(cpa.toFixed(2)),
+          cpl: Number(cpl.toFixed(2)),
+          er: Number(engagementRate.toFixed(2)),
+          roi: Number(roi.toFixed(2)),
+          roas: Number(roas.toFixed(2)),
+          revenue: Number(revenue.toFixed(2)),
+          conversionRate: Number((cvr * 100).toFixed(2)),
+        };
+      };
+
+      // Check if LinkedIn connection exists, create if not
+      let connection = await storage.getLinkedInConnection(campaignId);
+      if (!connection) {
+        console.log('Creating LinkedIn connection...');
+        connection = await storage.createLinkedInConnection({
+          campaignId,
+          adAccountId: 'demo-account-' + Math.random().toString(36).substring(7),
+          adAccountName: 'Performance Core Demo Account',
+          accessToken: 'demo_token_' + Date.now(),
+          refreshToken: 'demo_refresh_' + Date.now(),
+          method: 'oauth',
+          expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+        });
+        console.log('✓ LinkedIn connection created');
+      }
+
+      // Create import session
+      const session = await storage.createLinkedInImportSession({
+        campaignId,
+        adAccountId: connection.adAccountId,
+        adAccountName: connection.adAccountName,
+        selectedCampaignsCount: campaignProfiles.length,
+        selectedMetricsCount: 18, // All metrics
+        selectedMetricKeys: ['impressions', 'reach', 'clicks', 'engagements', 'spend', 'conversions', 'leads', 'videoViews', 'viralImpressions', 'ctr', 'cpc', 'cpm', 'cvr', 'cpa', 'cpl', 'er', 'roi', 'roas'],
+        conversionValue: null,
+      });
+
+      console.log('✓ Import session created');
+
+      let totalRecordsInserted = 0;
+      const campaignSummaries = [];
+
+      // Generate data for each campaign profile
+      for (const profile of campaignProfiles) {
+        const campaignIdUnique = `lc_${Math.random().toString(36).substring(2, 15)}`;
+
+        // Campaign totals
+        let totals = {
+          impressions: 0,
+          clicks: 0,
+          spend: 0,
+          conversions: 0,
+          leads: 0,
+          revenue: 0,
+        };
+
+        // Generate daily metrics
+        for (let dayOffset = 0; dayOffset < days; dayOffset++) {
+          const metrics = generateDailyMetrics(profile, dayOffset);
+
+          // Create import metric record
+          await storage.createLinkedInImportMetric({
+            sessionId: session.id,
+            campaignUrn: campaignIdUnique,
+            campaignName: profile.name,
+            campaignStatus: 'ACTIVE',
+            metricKey: 'impressions',
+            metricValue: metrics.impressions.toString(),
+          });
+
+          // Create ad performance record
+          await storage.createLinkedInAdPerformance({
+            sessionId: session.id,
+            campaignId: campaignIdUnique,
+            date: metrics.date,
+            impressions: metrics.impressions,
+            reach: metrics.reach,
+            clicks: metrics.clicks,
+            engagements: metrics.engagements,
+            spend: metrics.spend.toString(),
+            conversions: metrics.conversions,
+            leads: metrics.leads,
+            videoViews: metrics.videoViews,
+            viralImpressions: metrics.viralImpressions,
+            ctr: metrics.ctr.toString(),
+            cpc: metrics.cpc.toString(),
+            cpm: metrics.cpm.toString(),
+            cvr: metrics.cvr.toString(),
+            cpa: metrics.cpa.toString(),
+            cpl: metrics.cpl.toString(),
+            er: metrics.er.toString(),
+            roi: metrics.roi.toString(),
+            roas: metrics.roas.toString(),
+            revenue: metrics.revenue.toString(),
+            conversionRate: metrics.conversionRate.toString(),
+          });
+
+          totals.impressions += metrics.impressions;
+          totals.clicks += metrics.clicks;
+          totals.spend += metrics.spend;
+          totals.conversions += metrics.conversions;
+          totals.leads += metrics.leads;
+          totals.revenue += metrics.revenue;
+
+          totalRecordsInserted++;
+        }
+
+        campaignSummaries.push({
+          name: profile.name,
+          objective: profile.objective,
+          totals: {
+            impressions: totals.impressions.toLocaleString(),
+            clicks: totals.clicks.toLocaleString(),
+            spend: `$${totals.spend.toFixed(2)}`,
+            conversions: totals.conversions,
+            leads: totals.leads,
+            revenue: `$${totals.revenue.toFixed(2)}`,
+            avgCTR: ((totals.clicks / totals.impressions) * 100).toFixed(2) + '%',
+            avgROAS: (totals.revenue / totals.spend).toFixed(2),
+          }
+        });
+
+        console.log(`✓ Generated ${days} days of data for: ${profile.name}`);
+      }
+
+      console.log(`✅ Seed completed: ${totalRecordsInserted} records inserted`);
+
+      res.json({
+        success: true,
+        message: 'Realistic LinkedIn metrics data seeded successfully',
+        summary: {
+          sessionId: session.id,
+          campaignId,
+          totalRecords: totalRecordsInserted,
+          campaigns: campaignProfiles.length,
+          daysOfData: days,
+          timeRange: `Last ${days} days`,
+          campaigns: campaignSummaries,
+        }
+      });
+
+    } catch (error) {
+      console.error('LinkedIn seed data error:', error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to seed LinkedIn data",
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 

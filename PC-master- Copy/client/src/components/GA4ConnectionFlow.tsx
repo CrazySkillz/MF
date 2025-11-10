@@ -34,7 +34,27 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [showClientIdInput, setShowClientIdInput] = useState(false);
+  const [isOAuthConfigured, setIsOAuthConfigured] = useState(false);
+  const [isCheckingConfig, setIsCheckingConfig] = useState(true);
   const { toast } = useToast();
+
+  // Check if backend OAuth is configured
+  useEffect(() => {
+    const checkBackendOAuth = async () => {
+      try {
+        const response = await fetch('/api/auth/google/config');
+        const data = await response.json();
+        setIsOAuthConfigured(data.configured);
+        console.log('Backend OAuth configured:', data.configured);
+      } catch (error) {
+        console.error('Failed to check OAuth config:', error);
+        setIsOAuthConfigured(false);
+      } finally {
+        setIsCheckingConfig(false);
+      }
+    };
+    checkBackendOAuth();
+  }, []);
 
   const handleTokenConnect = async () => {
     console.log('GA4 Connect button clicked!', { campaignId, accessToken: accessToken.substring(0, 10) + '...', propertyId });
@@ -105,29 +125,141 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
   };
 
   const handleGoogleOAuth = async () => {
+    // If backend OAuth is configured, use it (marketing executive flow - no manual credentials needed)
+    if (isOAuthConfigured) {
+      setIsOAuthLoading(true);
+
+      try {
+        console.log('Using backend OAuth flow...');
+
+        // Get OAuth URL from backend (which has the credentials)
+        const response = await fetch('/api/auth/google/url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            campaignId,
+            returnUrl: window.location.href
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || data.error) {
+          throw new Error(data.error || 'Failed to generate OAuth URL');
+        }
+
+        console.log('Got OAuth URL from backend, opening popup...');
+
+        // Open OAuth popup - user just signs in with their Google account
+        const popup = window.open(
+          data.oauth_url,
+          'google_oauth',
+          'width=500,height=600,scrollbars=yes,resizable=yes'
+        );
+
+        if (!popup) {
+          setIsOAuthLoading(false);
+          throw new Error('Popup was blocked. Please allow popups and try again.');
+        }
+
+        // Listen for OAuth callback from popup
+        const handleOAuthMessage = (event: MessageEvent) => {
+          // Only accept messages from our own origin
+          if (event.origin !== window.location.origin) return;
+
+          console.log('Received message from popup:', event.data);
+
+          if (event.data.type === 'GOOGLE_AUTH_SUCCESS') {
+            // Remove listener
+            window.removeEventListener('message', handleOAuthMessage);
+            setIsOAuthLoading(false);
+
+            const { data: authData } = event.data;
+
+            if (authData && authData.properties) {
+              // Show property selection
+              setOauthProperties(authData.properties);
+              setShowPropertySelection(true);
+              toast({
+                title: "Authentication Successful!",
+                description: "Please select your GA4 property to complete the connection.",
+              });
+            } else {
+              toast({
+                title: "Authentication Successful!",
+                description: "But no GA4 properties found. Please check your Google Analytics account.",
+                variant: "destructive"
+              });
+            }
+          } else if (event.data.type === 'GOOGLE_AUTH_ERROR') {
+            window.removeEventListener('message', handleOAuthMessage);
+            setIsOAuthLoading(false);
+            toast({
+              title: "OAuth Failed",
+              description: event.data.error || "Authentication failed",
+              variant: "destructive"
+            });
+          }
+        };
+
+        window.addEventListener('message', handleOAuthMessage);
+
+        // Monitor popup closure
+        const checkClosed = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkClosed);
+            window.removeEventListener('message', handleOAuthMessage);
+            setIsOAuthLoading(false);
+          }
+        }, 1000);
+
+        toast({
+          title: "Check the Popup Window",
+          description: "Sign in with your Google account in the popup window that just opened.",
+          duration: 5000,
+        });
+
+        console.log('Popup opened successfully. Waiting for user to complete authorization...');
+
+      } catch (error) {
+        console.error('Backend OAuth flow error:', error);
+        setIsOAuthLoading(false);
+        toast({
+          title: "OAuth Failed",
+          description: error instanceof Error ? error.message : "Failed to start OAuth flow.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      return; // Don't continue to manual flow
+    }
+
+    // Fallback: Manual OAuth flow (for when backend OAuth isn't configured)
     if (!clientId || !clientSecret) {
       setShowClientIdInput(true);
       toast({
         title: "OAuth Credentials Required",
-        description: "Please enter both your Google OAuth Client ID and Client Secret to continue.",
+        description: "Backend OAuth not configured. Please enter credentials manually.",
         variant: "destructive"
       });
       return;
     }
 
     setIsOAuthLoading(true);
-    
+
     try {
       // Generate OAuth URL directly on client side
       const redirectUri = `${window.location.origin}/oauth-callback.html`;
-      const scope = 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/analytics.edit';
+      const scope = 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/analytics.edit https://www.googleapis.com/auth/analytics.manage.users.readonly';
       const responseType = 'code';
       const state = `campaign_${campaignId}`;
-      
+
       // Debug: Log the redirect URI being used
+      console.log('OAuth Debug - Using manual OAuth flow');
       console.log('OAuth Debug - Redirect URI being used:', redirectUri);
       console.log('OAuth Debug - Client ID:', clientId);
-      
+
       const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
         `client_id=${encodeURIComponent(clientId)}&` +
         `redirect_uri=${encodeURIComponent(redirectUri)}&` +
@@ -136,7 +268,7 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
         `state=${encodeURIComponent(state)}&` +
         `access_type=offline&` +
         `prompt=consent`;
-      
+
       console.log('OAuth Debug - Full OAuth URL:', oauthUrl);
       
       // Create OAuth callback handler
@@ -415,217 +547,104 @@ export function GA4ConnectionFlow({ campaignId, onConnectionSuccess }: GA4Connec
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="oauth" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="oauth" className="flex items-center gap-2">
-              <Zap className="w-4 h-4" />
-              Google OAuth
-            </TabsTrigger>
-            <TabsTrigger value="access-token" className="flex items-center gap-2">
-              <Key className="w-4 h-4" />
-              Manual Token
-            </TabsTrigger>
-            <TabsTrigger value="service-account" className="flex items-center gap-2">
-              <Upload className="w-4 h-4" />
-              Service Account
-            </TabsTrigger>
-          </TabsList>
-          
-          <TabsContent value="oauth" className="space-y-4 mt-6">
-            <div className="text-center space-y-4">
-              <div className="mx-auto w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
-                <Zap className="w-8 h-8 text-blue-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">
-                  One-Click Authentication
-                </h3>
-                <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
-                  Securely connect your Google Analytics with automatic token refresh. 
-                  Perfect for marketing professionals who need constant access to their data.
-                </p>
-              </div>
-              
-              {!showPropertySelection ? (
-                <div className="space-y-4">
+        {/* Simple OAuth-only flow - no confusing tabs */}
+        <div className="text-center space-y-6">
+          <div className="mx-auto w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
+            <Zap className="w-8 h-8 text-blue-600" />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">
+              Connect Your Google Analytics Account
+            </h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+              Click the button below to securely connect your Google Analytics account.
+              You'll be asked to authorize access, then you can select which property to track.
+            </p>
+          </div>
 
-                  
-                  {showClientIdInput && (
-                    <div className="space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border">
-                      <div className="space-y-2">
-                        <Label htmlFor="client-id">Google OAuth Client ID</Label>
-                        <Input
-                          id="client-id"
-                          placeholder="123456789-abc123.apps.googleusercontent.com"
-                          value={clientId}
-                          onChange={(e) => setClientId(e.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="client-secret">Google OAuth Client Secret</Label>
-                        <Input
-                          id="client-secret"
-                          type="password"
-                          placeholder="GOCSPX-abc123xyz789..."
-                          value={clientSecret}
-                          onChange={(e) => setClientSecret(e.target.value)}
-                        />
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-400">
-                        Get both credentials from <a href="https://console.cloud.google.com/apis/credentials" target="_blank" className="text-blue-600 hover:underline">Google Cloud Console</a> → APIs & Services → Credentials
-                      </p>
-                    </div>
-                  )}
-                  
-                  <Button 
-                    onClick={handleGoogleOAuth}
-                    disabled={isOAuthLoading || (!clientId || !clientSecret) && showClientIdInput}
-                    size="lg"
-                    className="w-full bg-blue-600 hover:bg-blue-700"
-                  >
-                    {isOAuthLoading ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                        Connecting...
-                      </>
-                    ) : (
-                      <>
-                        <Zap className="w-4 h-4 mr-2" />
-                        Connect with Google OAuth
-                      </>
-                    )}
-                  </Button>
-                  
-                  {!showClientIdInput && (
-                    <Button 
-                      variant="outline"
-                      onClick={() => setShowClientIdInput(true)}
-                      className="w-full"
-                    >
-                      <Key className="w-4 h-4 mr-2" />
-                      Enter OAuth Credentials
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="text-left">
-                    <Label htmlFor="property-select">Select GA4 Property</Label>
-                    <select 
-                      id="property-select"
-                      value={selectedProperty}
-                      onChange={(e) => setSelectedProperty(e.target.value)}
-                      className="w-full mt-2 p-2 border rounded-md bg-white dark:bg-slate-800"
-                    >
-                      <option value="">Choose a property...</option>
-                      {oauthProperties.map((prop) => (
-                        <option key={prop.id} value={prop.id}>
-                          {prop.name} (ID: {prop.id})
-                        </option>
-                      ))}
-                    </select>
+          {!showPropertySelection ? (
+            <div className="space-y-4">
+              {/* Only show manual credential input if backend OAuth is NOT configured */}
+              {!isOAuthConfigured && showClientIdInput && (
+                <div className="space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border">
+                  <div className="space-y-2">
+                    <Label htmlFor="client-id">Google OAuth Client ID</Label>
+                    <Input
+                      id="client-id"
+                      placeholder="123456789-abc123.apps.googleusercontent.com"
+                      value={clientId}
+                      onChange={(e) => setClientId(e.target.value)}
+                    />
                   </div>
-                  
-                  <Button 
-                    onClick={handlePropertySelection}
-                    className="w-full"
-                    disabled={!selectedProperty}
-                  >
-                    Complete Connection
-                  </Button>
+                  <div className="space-y-2">
+                    <Label htmlFor="client-secret">Google OAuth Client Secret</Label>
+                    <Input
+                      id="client-secret"
+                      type="password"
+                      placeholder="GOCSPX-abc123xyz789..."
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Get both credentials from <a href="https://console.cloud.google.com/apis/credentials" target="_blank" className="text-blue-600 hover:underline">Google Cloud Console</a> → APIs & Services → Credentials
+                  </p>
                 </div>
               )}
-            </div>
-          </TabsContent>
-          
-          <TabsContent value="access-token" className="space-y-4 mt-6">
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="property-id">GA4 Property ID *</Label>
-                <Input
-                  id="property-id"
-                  placeholder="123456789"
-                  value={propertyId}
-                  onChange={(e) => setPropertyId(e.target.value)}
-                />
-                <p className="text-xs text-gray-500">
-                  Find this in GA4: Admin → Property Settings → Property ID
-                </p>
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="access-token">Access Token *</Label>
-                <Textarea
-                  id="access-token"
-                  placeholder="ya29.a0..."
-                  value={accessToken}
-                  onChange={(e) => setAccessToken(e.target.value)}
-                  rows={3}
-                />
-                <p className="text-xs text-gray-500">
-                  Get from Google Cloud Console or OAuth Playground
-                </p>
-              </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="refresh-token">Refresh Token (Optional)</Label>
-                <Input
-                  id="refresh-token"
-                  placeholder="1//04..."
-                  value={refreshToken}
-                  onChange={(e) => setRefreshToken(e.target.value)}
-                />
-                <p className="text-xs text-gray-500">
-                  <strong>Highly recommended:</strong> Enables automatic token renewal so connection never expires
-                </p>
-              </div>
-              
-              <Button 
-                onClick={handleTokenConnect}
-                disabled={isConnecting}
-                className="w-full"
+
+              <Button
+                onClick={handleGoogleOAuth}
+                disabled={isCheckingConfig || isOAuthLoading || (!isOAuthConfigured && (!clientId || !clientSecret) && showClientIdInput)}
+                size="lg"
+                className="w-full bg-blue-600 hover:bg-blue-700"
               >
-                {isConnecting ? 'Connecting...' : 'Connect with Access Token'}
+                {isCheckingConfig ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Loading...
+                  </>
+                ) : isOAuthLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Connecting to Google...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 mr-2" />
+                    Connect Google Analytics
+                  </>
+                )}
               </Button>
             </div>
-          </TabsContent>
-          
-          <TabsContent value="service-account" className="space-y-4 mt-6">
+          ) : (
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="sa-property-id">GA4 Property ID *</Label>
-                <Input
-                  id="sa-property-id"
-                  placeholder="123456789"
-                  value={propertyId}
-                  onChange={(e) => setPropertyId(e.target.value)}
-                />
+              <div className="text-left">
+                <Label htmlFor="property-select">Select Your GA4 Property</Label>
+                <select
+                  id="property-select"
+                  value={selectedProperty}
+                  onChange={(e) => setSelectedProperty(e.target.value)}
+                  className="w-full mt-2 p-2 border rounded-md bg-white dark:bg-slate-800"
+                >
+                  <option value="">Choose a property...</option>
+                  {oauthProperties.map((prop) => (
+                    <option key={prop.id} value={prop.id}>
+                      {prop.name} (ID: {prop.id})
+                    </option>
+                  ))}
+                </select>
               </div>
-              
-              <div className="space-y-2">
-                <Label htmlFor="service-account">Service Account JSON *</Label>
-                <Textarea
-                  id="service-account"
-                  placeholder='{"type": "service_account", "project_id": "...", ...}'
-                  value={serviceAccountKey}
-                  onChange={(e) => setServiceAccountKey(e.target.value)}
-                  rows={6}
-                />
-                <p className="text-xs text-gray-500">
-                  Paste your service account JSON key from Google Cloud Console
-                </p>
-              </div>
-              
-              <Button 
-                onClick={handleServiceAccountConnect}
-                disabled={isConnecting}
+
+              <Button
+                onClick={handlePropertySelection}
                 className="w-full"
+                disabled={!selectedProperty}
               >
-                {isConnecting ? 'Connecting...' : 'Connect with Service Account'}
+                Complete Connection
               </Button>
             </div>
-          </TabsContent>
-        </Tabs>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
