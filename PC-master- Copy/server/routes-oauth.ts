@@ -853,7 +853,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { connectionId } = req.params;
       const success = await storage.deleteGA4Connection(connectionId);
-      
+
       if (success) {
         res.json({ success: true, message: 'Connection deleted successfully' });
       } else {
@@ -862,6 +862,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Error deleting connection:', error);
       res.status(500).json({ error: 'Failed to delete connection' });
+    }
+  });
+
+  // Transfer GA4 connection from temp campaign to real campaign
+  app.post("/api/ga4/transfer-connection", async (req, res) => {
+    try {
+      const { fromCampaignId, toCampaignId } = req.body;
+
+      console.log('🔄 GA4 connection transfer request:', { fromCampaignId, toCampaignId });
+
+      if (!fromCampaignId || !toCampaignId) {
+        console.error('❌ Missing fromCampaignId or toCampaignId');
+        return res.status(400).json({ error: 'Both fromCampaignId and toCampaignId are required' });
+      }
+
+      // Get all GA4 connections for the temp campaign
+      const tempConnections = await storage.getGA4Connections(fromCampaignId);
+
+      console.log('📊 Found connections to transfer:', {
+        fromCampaignId,
+        count: tempConnections.length,
+        connectionIds: tempConnections.map(c => c.id)
+      });
+
+      if (tempConnections.length === 0) {
+        console.warn('⚠️ No connections found to transfer');
+        return res.json({
+          success: true,
+          message: 'No connections to transfer',
+          transferred: 0
+        });
+      }
+
+      // Update each connection's campaignId to the new campaign
+      let transferred = 0;
+      for (const connection of tempConnections) {
+        try {
+          await storage.updateGA4Connection(connection.id, {
+            campaignId: toCampaignId
+          });
+          transferred++;
+          console.log('✅ Transferred connection:', {
+            connectionId: connection.id,
+            propertyId: connection.propertyId,
+            from: fromCampaignId,
+            to: toCampaignId
+          });
+        } catch (error) {
+          console.error('❌ Failed to transfer connection:', connection.id, error);
+        }
+      }
+
+      // Also transfer OAuth connections from global memory if they exist
+      const oauthConnections = (global as any).oauthConnections;
+      if (oauthConnections && oauthConnections.has(fromCampaignId)) {
+        const tempOAuthConnection = oauthConnections.get(fromCampaignId);
+        oauthConnections.set(toCampaignId, tempOAuthConnection);
+        oauthConnections.delete(fromCampaignId);
+        console.log('✅ Transferred OAuth connection from memory');
+      }
+
+      // Transfer realGA4Connections from global memory
+      const realGA4Connections = (global as any).realGA4Connections;
+      if (realGA4Connections && realGA4Connections.has(fromCampaignId)) {
+        const tempRealConnection = realGA4Connections.get(fromCampaignId);
+        realGA4Connections.set(toCampaignId, tempRealConnection);
+        realGA4Connections.delete(fromCampaignId);
+        console.log('✅ Transferred real GA4 connection from memory');
+      }
+
+      console.log('🎉 Transfer complete:', {
+        transferred,
+        total: tempConnections.length
+      });
+
+      res.json({
+        success: true,
+        message: `Successfully transferred ${transferred} connection(s)`,
+        transferred
+      });
+    } catch (error) {
+      console.error('❌ GA4 connection transfer error:', error);
+      res.status(500).json({
+        error: 'Failed to transfer GA4 connection',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
