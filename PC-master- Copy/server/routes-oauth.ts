@@ -745,9 +745,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/ga4/check-connection/:campaignId", async (req, res) => {
     try {
       const campaignId = req.params.campaignId;
-      
+
+      console.log('🔍 Checking GA4 connection for campaign:', campaignId);
+
       // Get all GA4 connections for this campaign
       const ga4Connections = await storage.getGA4Connections(campaignId);
+
+      console.log('📊 GA4 connections found:', {
+        campaignId,
+        count: ga4Connections?.length || 0,
+        connections: ga4Connections?.map(c => ({
+          id: c.id,
+          propertyId: c.propertyId,
+          propertyName: c.propertyName,
+          isPrimary: c.isPrimary,
+          connectedAt: c.connectedAt
+        }))
+      });
       
       if (ga4Connections && ga4Connections.length > 0) {
         const primaryConnection = ga4Connections.find(conn => conn.isPrimary) || ga4Connections[0];
@@ -920,7 +934,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.warn('⚠️ No GA4 connection found in database for campaign:', campaignId);
           console.log('🔧 Creating new GA4 connection in database...');
 
-          await storage.createGA4Connection({
+          const newConnection = await storage.createGA4Connection({
             campaignId,
             propertyId,
             accessToken: connection.accessToken,
@@ -931,7 +945,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
             clientSecret: null,
             serviceAccountKey: null
           });
-          console.log('✅ Created new GA4 connection in database');
+          console.log('✅ Created new GA4 connection in database:', {
+            connectionId: newConnection.id,
+            campaignId: newConnection.campaignId,
+            propertyId: newConnection.propertyId,
+            propertyName: newConnection.propertyName
+          });
+
+          // Immediately verify it was saved
+          const verifyConnections = await storage.getGA4Connections(campaignId);
+          console.log('🔎 Verification - connections now in storage:', {
+            count: verifyConnections.length,
+            ids: verifyConnections.map(c => c.id)
+          });
         }
       } catch (dbError) {
         console.warn('⚠️ Database save failed (continuing with in-memory storage):', dbError instanceof Error ? dbError.message : dbError);
