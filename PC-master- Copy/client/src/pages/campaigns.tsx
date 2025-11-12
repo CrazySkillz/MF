@@ -835,6 +835,19 @@ export default function Campaigns() {
           const result = await response.json();
           if (result.success) {
             console.log('✅ GA4 connection transferred successfully to campaign:', (newCampaign as any).id);
+            // CRITICAL: Invalidate ALL GA4-related caches to force refetch
+            await queryClient.invalidateQueries({
+              queryKey: ["/api/ga4/check-connection", (newCampaign as any).id]
+            });
+            await queryClient.invalidateQueries({
+              queryKey: ["/api/campaigns", (newCampaign as any).id, "ga4-metrics"]
+            });
+            await queryClient.refetchQueries({
+              queryKey: ["/api/ga4/check-connection", (newCampaign as any).id]
+            });
+            console.log('🔄 Invalidated and refetched GA4 connection cache for campaign:', (newCampaign as any).id);
+          } else {
+            console.error('❌ GA4 transfer returned error:', result);
           }
         } catch (error) {
           console.error('❌ Failed to transfer GA4 connection:', error);
@@ -919,20 +932,29 @@ export default function Campaigns() {
       }
 
       // All transfers complete - now clean up and navigate
+      console.log('🎉 All transfers complete. Campaign ID:', (newCampaign as any).id);
+
+      // Final cache invalidation to ensure fresh data
+      await queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
+
       toast({
         title: "Campaign created",
         description: "Your new campaign has been created successfully.",
       });
-      
+
       setIsCreateModalOpen(false);
       setShowConnectorsStep(false);
       setCampaignData(null);
       setLinkedInImportComplete(false);
       setConnectedPlatformsInDialog([]);
       form.reset();
-      
-      // Navigate to campaigns page after all transfers complete
-      setLocation("/campaigns");
+
+      // Wait a moment for cache invalidation to propagate
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Navigate directly to campaign detail page to see fresh connection status
+      console.log('🚀 Navigating to campaign:', (newCampaign as any).id);
+      setLocation(`/campaigns/${(newCampaign as any).id}`);
     }
   };
 
